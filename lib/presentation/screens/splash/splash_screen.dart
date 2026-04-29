@@ -2,12 +2,12 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/constants/app_constants.dart';
-import '../../services/audio_service.dart';
-import '../../services/ad_service.dart';
-import '../providers/game_provider.dart';
-import '../screens/home/home_screen.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/constants/app_constants.dart';
+import '../../../services/audio_service.dart';
+import '../../../services/ad_service.dart';
+import '../../providers/game_provider.dart';
+import '../home/home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -57,20 +57,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         decoration: const BoxDecoration(gradient: AppColors.gradientBg),
         child: Stack(
           children: [
-            // Animated background particles
             ...List.generate(12, (i) => _Particle(index: i)),
-            // Main content
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Logo tubes illustration
                   _LogoTubes()
                       .animate()
                       .fadeIn(duration: 600.ms)
                       .slideY(begin: -0.3, duration: 700.ms, curve: Curves.easeOut),
                   const SizedBox(height: 28),
-                  // App name
                   AnimatedBuilder(
                     animation: _glowController,
                     builder: (_, __) => Text(
@@ -80,7 +76,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                         fontWeight: FontWeight.w800,
                         fontFamily: 'Poppins',
                         foreground: Paint()
-                          ..shader = LinearGradient(
+                          ..shader = const LinearGradient(
                             colors: [AppColors.neonBlue, AppColors.neonPurple],
                           ).createShader(const Rect.fromLTWH(0, 0, 220, 60)),
                         shadows: [
@@ -96,7 +92,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                       .fadeIn(delay: 400.ms, duration: 600.ms)
                       .scale(begin: const Offset(0.8, 0.8), delay: 400.ms),
                   const SizedBox(height: 8),
-                  Text(
+                  const Text(
                     'Color Sort · Fluid Puzzle',
                     style: TextStyle(
                       fontSize: 14,
@@ -104,36 +100,28 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                       color: AppColors.white40,
                       letterSpacing: 2,
                     ),
-                  )
-                      .animate()
-                      .fadeIn(delay: 700.ms, duration: 600.ms),
+                  ).animate().fadeIn(delay: 700.ms, duration: 600.ms),
                   const SizedBox(height: 48),
-                  // Loading dots
-                  _LoadingDots()
-                      .animate()
-                      .fadeIn(delay: 1000.ms),
+                  _LoadingDots().animate().fadeIn(delay: 1000.ms),
                 ],
               ),
             ),
-            // "by chAs" at the bottom
             Positioned(
               bottom: 40,
               left: 0,
               right: 0,
-              child: Column(
-                children: [
-                  Text(
-                    'by chAs',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontFamily: 'Poppins',
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.white40,
-                      letterSpacing: 1.5,
-                    ),
-                  ).animate().fadeIn(delay: 1200.ms),
-                ],
-              ),
+              child: const Center(
+                child: Text(
+                  'by chAs',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontFamily: 'Poppins',
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.white40,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ).animate().fadeIn(delay: 1200.ms),
             ),
           ],
         ),
@@ -145,14 +133,13 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 class _LogoTubes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final colors = [
+    const colors = [
       AppColors.neonBlue,
       AppColors.neonPurple,
       AppColors.neonGreen,
       AppColors.neonOrange,
     ];
-    final fills = [0.75, 0.50, 0.90, 0.35];
-
+    const fills = [0.75, 0.50, 0.90, 0.35];
     return SizedBox(
       width: 160,
       height: 120,
@@ -178,7 +165,6 @@ class _GlassTube extends StatelessWidget {
   final Color color;
   final double fillRatio;
   final double height;
-
   const _GlassTube({required this.color, required this.fillRatio, required this.height});
 
   @override
@@ -223,9 +209,13 @@ class _LoadingDotsState extends State<_LoadingDots> with TickerProviderStateMixi
   void initState() {
     super.initState();
     _controllers = List.generate(3, (i) {
-      final c = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))
-        ..repeat(reverse: true);
-      Future.delayed(Duration(milliseconds: i * 150), () { if (mounted) c.forward(); });
+      final c = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 600),
+      )..repeat(reverse: true);
+      Future.delayed(Duration(milliseconds: i * 150), () {
+        if (mounted) c.forward();
+      });
       return c;
     });
   }
@@ -273,17 +263,13 @@ class _ParticleState extends State<_Particle> with SingleTickerProviderStateMixi
   @override
   void initState() {
     super.initState();
-    _randomize();
+    x = _rng.nextDouble();
+    y = _rng.nextDouble();
+    size = 2 + _rng.nextDouble() * 4;
     _c = AnimationController(
       vsync: this,
       duration: Duration(seconds: 3 + _rng.nextInt(4)),
     )..repeat(reverse: true);
-  }
-
-  void _randomize() {
-    x = _rng.nextDouble();
-    y = _rng.nextDouble();
-    size = 2 + _rng.nextDouble() * 4;
   }
 
   @override
@@ -291,7 +277,7 @@ class _ParticleState extends State<_Particle> with SingleTickerProviderStateMixi
 
   @override
   Widget build(BuildContext context) {
-    final colors = [AppColors.neonBlue, AppColors.neonPurple, AppColors.neonGreen];
+    const colors = [AppColors.neonBlue, AppColors.neonPurple, AppColors.neonGreen];
     final color = colors[widget.index % colors.length];
     final sz = MediaQuery.of(context).size;
     return Positioned(
@@ -315,5 +301,3 @@ class _ParticleState extends State<_Particle> with SingleTickerProviderStateMixi
     );
   }
 }
-
-
