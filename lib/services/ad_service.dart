@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import '../core/constants/app_constants.dart';
 
@@ -115,10 +114,7 @@ class AdService {
     required void Function(AdWithoutView ad, RewardItem reward) onRewarded,
     VoidCallback? onFailed,
   }) async {
-    if (_rewardedAd == null) {
-      onFailed?.call();
-      return;
-    }
+    if (_rewardedAd == null) { onFailed?.call(); return; }
     _rewardedAd!.fullScreenContentCallback = FullScreenContentCallback(
       onAdDismissedFullScreenContent: (ad) {
         ad.dispose();
