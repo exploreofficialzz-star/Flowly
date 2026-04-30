@@ -12,7 +12,7 @@ dependencies:
   provider: ^6.1.1
   shared_preferences: ^2.2.2
   sqflite: ^2.3.0
-  path: ^1.9.0
+  path: ^1.8.3
   audioplayers: ^5.2.1
   google_mobile_ads: ^4.0.0
   flutter_animate: ^4.3.0
