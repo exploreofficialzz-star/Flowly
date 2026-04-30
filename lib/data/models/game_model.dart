@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 
 class TubeModel {
-  final List<int> colors; // color indices, max 4
+  final List<int> colors;
   final int capacity;
-  bool isSelected;
-  bool isCompleted;
+  final bool isSelected;
+  final bool isCompleted;
 
-  TubeModel({
+  const TubeModel({
     required this.colors,
     this.capacity = 4,
     this.isSelected = false,
@@ -21,7 +21,7 @@ class TubeModel {
     bool? isCompleted,
   }) {
     return TubeModel(
-      colors: colors ?? List.from(this.colors),
+      colors: colors ?? List<int>.from(this.colors),
       capacity: capacity ?? this.capacity,
       isSelected: isSelected ?? this.isSelected,
       isCompleted: isCompleted ?? this.isCompleted,
@@ -31,6 +31,7 @@ class TubeModel {
   bool get isEmpty => colors.isEmpty;
   bool get isFull => colors.length >= capacity;
   int? get topColor => colors.isEmpty ? null : colors.last;
+
   int get topColorCount {
     if (colors.isEmpty) return 0;
     final top = colors.last;
@@ -42,7 +43,8 @@ class TubeModel {
     return count;
   }
 
-  bool get isUniform => colors.isNotEmpty && colors.every((c) => c == colors.first);
+  bool get isUniform =>
+      colors.isNotEmpty && colors.every((c) => c == colors.first);
   bool get isPerfect => isUniform && colors.length == capacity;
 
   bool canReceive(TubeModel from) {
@@ -52,22 +54,9 @@ class TubeModel {
     return topColor == from.topColor;
   }
 
-  Color get liquidColor =>
-      colors.isEmpty ? Colors.transparent : AppColors.liquidColors[colors.last % AppColors.liquidColors.length];
-}
-
-class GameMove {
-  final int fromIndex;
-  final int toIndex;
-  final int colorMoved;
-  final int countMoved;
-
-  const GameMove({
-    required this.fromIndex,
-    required this.toIndex,
-    required this.colorMoved,
-    required this.countMoved,
-  });
+  Color get liquidColor => colors.isEmpty
+      ? Colors.transparent
+      : AppColors.liquidColors[colors.last % AppColors.liquidColors.length];
 }
 
 class LevelConfig {
@@ -78,7 +67,7 @@ class LevelConfig {
   final int emptyTubes;
   final int colorCount;
   final List<List<int>> initialState;
-  final String difficulty; // easy, medium, hard, expert
+  final String difficulty;
 
   const LevelConfig({
     required this.id,
