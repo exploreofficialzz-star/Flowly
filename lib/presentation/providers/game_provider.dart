@@ -9,10 +9,22 @@ import '../../core/constants/app_constants.dart';
 
 enum GameStatus { idle, playing, won }
 
+// Holds data about the current pour in progress
+class PourEvent {
+  final int fromIndex;
+  final int toIndex;
+  final int color;
+  final int count;
+  PourEvent({
+    required this.fromIndex,
+    required this.toIndex,
+    required this.color,
+    required this.count,
+  });
+}
+
 class GameProvider extends ChangeNotifier {
   final _audio = AudioService();
-
-  // All 100 levels — generated once synchronously
   final List<LevelConfig> _allLevels = LevelGenerator.generateAll();
 
   List<TubeModel> _tubes = [];
@@ -57,9 +69,13 @@ class GameProvider extends ChangeNotifier {
   int? get hintFrom => _hintFromIndex;
   int? get hintTo => _hintToIndex;
 
-  // Called from splash screen
+  // Pour animation state — UI reads this to play the pour effect
+  PourEvent? _currentPour;
+  PourEvent? get currentPour => _currentPour;
+  bool _isPouring = false;
+  bool get isPouring => _isPouring;
+
   Future<void> init() async {
-    // Load progress from prefs
     try {
       final prefs = await SharedPreferences.getInstance();
       _currentWorldIndex = prefs.getInt(AppConstants.keyCurrentWorld) ?? 0;
@@ -69,14 +85,10 @@ class GameProvider extends ChangeNotifier {
       _dailyStreak = prefs.getInt(AppConstants.keyDailyStreak) ?? 0;
       _hints = prefs.getInt(AppConstants.keyTotalHints) ?? 3;
       _updateStreak(prefs);
-    } catch (_) {
-      // Defaults already set above
-    }
+    } catch (_) {}
 
-    // Load audio (non-blocking)
     _audio.init().catchError((_) {});
 
-    // Load the current level immediately
     final idx = (_currentWorldIndex * 20 + _currentLevelInWorld)
         .clamp(0, _allLevels.length - 1);
     _loadLevelInternal(idx);
@@ -88,12 +100,9 @@ class GameProvider extends ChangeNotifier {
     _currentLevelId = idx;
     _currentWorldIndex = lvl.worldId;
     _currentLevelInWorld = lvl.levelInWorld;
-
-    // Build tube models
     _tubes = lvl.initialState
         .map((colors) => TubeModel(colors: List<int>.from(colors)))
         .toList();
-
     _selectedIndex = null;
     _undoStack.clear();
     _moves = 0;
@@ -102,12 +111,12 @@ class GameProvider extends ChangeNotifier {
     _isHinting = false;
     _hintFromIndex = null;
     _hintToIndex = null;
-
+    _currentPour = null;
+    _isPouring = false;
     notifyListeners();
     _audio.playLevelStart().catchError((_) {});
   }
 
-  // Public API
   void loadLevel(int globalId) {
     _loadLevelInternal(globalId);
     _saveProgress();
@@ -120,18 +129,16 @@ class GameProvider extends ChangeNotifier {
 
   void nextLevel() {
     final nextId = _currentLevelId + 1;
-    if (nextId < _allLevels.length) {
-      loadLevel(nextId);
-    }
+    if (nextId < _allLevels.length) loadLevel(nextId);
   }
 
   void selectTube(int index) {
     if (_status != GameStatus.playing) return;
+    if (_isPouring) return; // block input during pour animation
     if (index < 0 || index >= _tubes.length) return;
 
     _audio.playTap().catchError((_) {});
 
-    // Nothing selected yet
     if (_selectedIndex == null) {
       if (_tubes[index].isEmpty) return;
       if (_tubes[index].isPerfect) return;
@@ -142,7 +149,6 @@ class GameProvider extends ChangeNotifier {
       return;
     }
 
-    // Tapped same tube — deselect
     if (_selectedIndex == index) {
       _tubes[index] = _tubes[index].copyWith(isSelected: false);
       _selectedIndex = null;
@@ -154,9 +160,8 @@ class GameProvider extends ChangeNotifier {
     final to = _tubes[index];
 
     if (to.canReceive(from)) {
-      _pour(_selectedIndex!, index);
+      _initiatePour(_selectedIndex!, index);
     } else {
-      // Invalid — switch selection if target has liquid
       _audio.playError().catchError((_) {});
       _tryHaptic(HapticFeedback.heavyImpact);
       _tubes[_selectedIndex!] =
@@ -171,7 +176,30 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
-  void _pour(int fromIdx, int toIdx) {
+  void _initiatePour(int fromIdx, int toIdx) {
+    final from = _tubes[fromIdx];
+    final topColor = from.topColor!;
+    final topCount = from.topColorCount;
+    final canFit = _tubes[toIdx].capacity - _tubes[toIdx].colors.length;
+    final moveCount = min(topCount, canFit);
+
+    // Set pour event so UI can animate
+    _currentPour = PourEvent(
+      fromIndex: fromIdx,
+      toIndex: toIdx,
+      color: topColor,
+      count: moveCount,
+    );
+    _isPouring = true;
+    notifyListeners();
+
+    // After animation duration, commit the move
+    Future.delayed(const Duration(milliseconds: 700), () {
+      _commitPour(fromIdx, toIdx, moveCount, topColor);
+    });
+  }
+
+  void _commitPour(int fromIdx, int toIdx, int moveCount, int topColor) {
     // Snapshot for undo
     _undoStack.add(_tubes
         .map((t) => t.copyWith(
@@ -179,28 +207,24 @@ class GameProvider extends ChangeNotifier {
         .toList());
     if (_undoStack.length > 30) _undoStack.removeAt(0);
 
-    final from = _tubes[fromIdx];
-    final to = _tubes[toIdx];
-    final topColor = from.topColor!;
-    final topCount = from.topColorCount;
-    final canFit = to.capacity - to.colors.length;
-    final moveCount = min(topCount, canFit);
-
-    final newFrom = List<int>.from(from.colors);
-    final newTo = List<int>.from(to.colors);
+    final newFrom = List<int>.from(_tubes[fromIdx].colors);
+    final newTo = List<int>.from(_tubes[toIdx].colors);
     for (int i = 0; i < moveCount; i++) {
       newFrom.removeLast();
       newTo.add(topColor);
     }
 
-    final newToTube = TubeModel(colors: newTo, capacity: to.capacity);
-    _tubes[fromIdx] = from.copyWith(colors: newFrom, isSelected: false);
+    final newToTube = TubeModel(colors: newTo, capacity: _tubes[toIdx].capacity);
+    _tubes[fromIdx] = _tubes[fromIdx].copyWith(
+        colors: newFrom, isSelected: false);
     _tubes[toIdx] = newToTube.isPerfect
         ? newToTube.copyWith(isCompleted: true)
         : newToTube;
 
     _selectedIndex = null;
     _moves++;
+    _currentPour = null;
+    _isPouring = false;
 
     _audio.playPour().catchError((_) {});
     _tryHaptic(HapticFeedback.lightImpact);
@@ -238,6 +262,8 @@ class GameProvider extends ChangeNotifier {
     _selectedIndex = null;
     _moves = max(0, _moves - 1);
     _status = GameStatus.playing;
+    _isPouring = false;
+    _currentPour = null;
     _audio.playClick().catchError((_) {});
     _tryHaptic(HapticFeedback.selectionClick);
     notifyListeners();
@@ -264,7 +290,6 @@ class GameProvider extends ChangeNotifier {
   }
 
   List<int>? _findBestMove() {
-    // Priority 1: move that completes a tube
     for (int f = 0; f < _tubes.length; f++) {
       if (_tubes[f].isEmpty) continue;
       for (int t = 0; t < _tubes.length; t++) {
@@ -276,7 +301,6 @@ class GameProvider extends ChangeNotifier {
         }
       }
     }
-    // Priority 2: any valid move
     for (int f = 0; f < _tubes.length; f++) {
       if (_tubes[f].isEmpty) continue;
       for (int t = 0; t < _tubes.length; t++) {
