@@ -2,9 +2,6 @@ import 'dart:math';
 import '../models/game_model.dart';
 
 class LevelGenerator {
-  static final _rng = Random(42); // seeded for consistency
-
-  /// Generate all 100 levels (5 worlds x 20 levels each)
   static List<LevelConfig> generateAll() {
     final levels = <LevelConfig>[];
     for (int world = 0; world < 5; world++) {
@@ -17,33 +14,30 @@ class LevelGenerator {
   }
 
   static LevelConfig _generate(int id, int worldId, int levelInWorld) {
-    // Progressive difficulty
     final progress = (worldId * 20 + levelInWorld) / 100.0;
     int colorCount, emptyTubes;
     String difficulty;
 
-    if (progress < 0.15) {
+    if (progress < 0.10) {
       colorCount = 3; emptyTubes = 2; difficulty = 'easy';
-    } else if (progress < 0.35) {
+    } else if (progress < 0.25) {
       colorCount = 4; emptyTubes = 2; difficulty = 'easy';
-    } else if (progress < 0.55) {
+    } else if (progress < 0.45) {
       colorCount = 5; emptyTubes = 2; difficulty = 'medium';
-    } else if (progress < 0.70) {
+    } else if (progress < 0.60) {
       colorCount = 6; emptyTubes = 2; difficulty = 'medium';
-    } else if (progress < 0.85) {
+    } else if (progress < 0.78) {
       colorCount = 7; emptyTubes = 2; difficulty = 'hard';
     } else {
       colorCount = 8; emptyTubes = 2; difficulty = 'expert';
     }
 
-    final tubeCount = colorCount + emptyTubes;
-    final initialState = _generateSolvable(colorCount, emptyTubes, id);
-
+    final initialState = _generateSolvableShuffled(colorCount, emptyTubes, id);
     return LevelConfig(
       id: id,
       worldId: worldId,
       levelInWorld: levelInWorld,
-      tubeCount: tubeCount,
+      tubeCount: colorCount + emptyTubes,
       emptyTubes: emptyTubes,
       colorCount: colorCount,
       initialState: initialState,
@@ -51,63 +45,113 @@ class LevelGenerator {
     );
   }
 
-  static List<List<int>> _generateSolvable(int colorCount, int emptyTubes, int seed) {
-    final rng = Random(seed * 1337 + 42);
+  static List<List<int>> _generateSolvableShuffled(
+      int colorCount, int emptyTubes, int seed) {
+    final rng = Random(seed * 7919 + 1337);
     const capacity = 4;
 
-    // Start from solved state, then shuffle
-    final solved = <List<int>>[];
+    // Build solved state
+    var state = <List<int>>[];
     for (int c = 0; c < colorCount; c++) {
-      solved.add(List.filled(capacity, c));
+      state.add(List.filled(capacity, c));
     }
     for (int e = 0; e < emptyTubes; e++) {
-      solved.add([]);
+      state.add(<int>[]);
     }
 
-    // Simulate random valid moves to shuffle
-    var state = solved.map((t) => List<int>.from(t)).toList();
-    int shuffleMoves = 20 + colorCount * 8;
+    // Shuffle aggressively — minimum moves based on difficulty
+    final minMoves = 30 + colorCount * 15;
+    int attempts = 0;
+    int validMoves = 0;
 
-    for (int m = 0; m < shuffleMoves; m++) {
+    while (validMoves < minMoves && attempts < 2000) {
+      attempts++;
+
+      // Pick random non-empty source tube
       final nonEmpty = <int>[];
       for (int i = 0; i < state.length; i++) {
-        if (state[i].isNotEmpty) nonEmpty.add(i);
+        if (state[i].isNotEmpty && !_isUniform(state[i])) nonEmpty.add(i);
       }
-      if (nonEmpty.isEmpty) break;
+      // Also allow uniform tubes to be sources
+      final allNonEmpty = <int>[];
+      for (int i = 0; i < state.length; i++) {
+        if (state[i].isNotEmpty) allNonEmpty.add(i);
+      }
 
-      final from = nonEmpty[rng.nextInt(nonEmpty.length)];
-      final fromTop = state[from].last;
+      final sources = nonEmpty.isNotEmpty ? nonEmpty : allNonEmpty;
+      if (sources.isEmpty) break;
 
+      final fromIdx = sources[rng.nextInt(sources.length)];
+      final fromTube = state[fromIdx];
+      final topColor = fromTube.last;
+      final topCount = _topColorCount(fromTube);
+
+      // Find valid destinations
       final validTo = <int>[];
       for (int i = 0; i < state.length; i++) {
-        if (i == from) continue;
+        if (i == fromIdx) continue;
         if (state[i].length >= capacity) continue;
-        if (state[i].isEmpty || state[i].last == fromTop) {
-          // avoid moving uniform full to empty (pointless)
-          if (state[i].isEmpty && state[from].every((c) => c == state[from].first)) continue;
-          validTo.add(i);
+        // Don't move to empty if source is uniform (pointless)
+        if (state[i].isEmpty && _isUniform(fromTube)) continue;
+        if (state[i].isEmpty || state[i].last == topColor) {
+          // Don't complete a tube during shuffle (keep it mixed)
+          final willFill = state[i].length + topCount >= capacity;
+          final wouldComplete = willFill && state[i].isNotEmpty &&
+              state[i].every((c) => c == topColor);
+          if (!wouldComplete) validTo.add(i);
         }
       }
 
       if (validTo.isEmpty) continue;
-      final to = validTo[rng.nextInt(validTo.length)];
 
-      // Move top color segment
-      int count = 0;
-      for (int i = state[from].length - 1; i >= 0; i--) {
-        if (state[from][i] == fromTop) count++;
-        else break;
+      final toIdx = validTo[rng.nextInt(validTo.length)];
+      final canFit = capacity - state[toIdx].length;
+      final moveCount = min(topCount, canFit);
+
+      for (int i = 0; i < moveCount; i++) {
+        state[toIdx].add(state[fromIdx].removeLast());
       }
-      final canMove = min(count, capacity - state[to].length);
-      for (int i = 0; i < canMove; i++) {
-        state[to].add(state[from].removeLast());
+      validMoves++;
+    }
+
+    // Verify it's not solved (shuffle was effective)
+    if (_isSolved(state)) {
+      // Force one more mix
+      for (int f = 0; f < state.length; f++) {
+        if (state[f].length < 2) continue;
+        for (int t = 0; t < state.length; t++) {
+          if (f == t) continue;
+          if (state[t].length < capacity) {
+            state[t].add(state[f].removeLast());
+            break;
+          }
+        }
+        break;
       }
     }
 
     return state;
   }
 
-  /// Daily challenge - deterministic by date
+  static bool _isUniform(List<int> tube) =>
+      tube.isNotEmpty && tube.every((c) => c == tube.first);
+
+  static int _topColorCount(List<int> tube) {
+    if (tube.isEmpty) return 0;
+    final top = tube.last;
+    int count = 0;
+    for (int i = tube.length - 1; i >= 0; i--) {
+      if (tube[i] == top) count++;
+      else break;
+    }
+    return count;
+  }
+
+  static bool _isSolved(List<List<int>> state) {
+    return state.every((t) =>
+        t.isEmpty || (t.length == 4 && t.every((c) => c == t.first)));
+  }
+
   static LevelConfig dailyChallenge(DateTime date) {
     final seed = date.year * 10000 + date.month * 100 + date.day;
     return _generate(seed % 100, 2, seed % 20);
