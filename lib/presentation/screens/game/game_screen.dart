@@ -346,7 +346,7 @@ class _PourStreamPainter extends CustomPainter {
 
     // Pour mouth — tip of tilted tube
     final mouthX = from.dx + (tubeW / 2 + 4) * (isRight ? 1 : -1);
-    final mouthY = from.y + tubeH * 0.15;
+    final mouthY = from.dy + tubeH * 0.15;
     final mouth = Offset(mouthX, mouthY);
 
     // Destination top center
