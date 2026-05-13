@@ -4,13 +4,15 @@ import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../services/iap_service.dart';
 
-/// Compact banner shown inline — press opens the full sheet
+// ── Inline banner ──────────────────────────────────────────────────────────────
 class RemoveAdsBanner extends StatelessWidget {
   const RemoveAdsBanner({super.key});
 
   @override
   Widget build(BuildContext context) {
     final iap = context.watch<IapService>();
+
+    // Already purchased — show expiry confirmation
     if (iap.adsRemoved) {
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -21,7 +23,8 @@ class RemoveAdsBanner extends StatelessWidget {
           border: Border.all(color: AppColors.neonGreen.withOpacity(0.3)),
         ),
         child: Row(children: [
-          const Icon(Icons.block_rounded, color: AppColors.neonGreen, size: 16),
+          const Icon(Icons.check_circle_rounded,
+              color: AppColors.neonGreen, size: 16),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -38,6 +41,7 @@ class RemoveAdsBanner extends StatelessWidget {
       );
     }
 
+    // Not purchased — show upsell banner
     return GestureDetector(
       onTap: () => RemoveAdsSheet.show(context),
       child: Container(
@@ -61,8 +65,8 @@ class RemoveAdsBanner extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: AppColors.gradientPrimary,
             ),
-            child:
-                const Icon(Icons.block_rounded, color: Colors.white, size: 14),
+            child: const Icon(Icons.block_rounded,
+                color: Colors.white, size: 14),
           ),
           const SizedBox(width: 12),
           const Expanded(
@@ -91,6 +95,7 @@ class RemoveAdsBanner extends StatelessWidget {
   }
 }
 
+// ── Bottom sheet ───────────────────────────────────────────────────────────────
 class RemoveAdsSheet extends StatelessWidget {
   const RemoveAdsSheet({super.key});
 
@@ -121,8 +126,7 @@ class RemoveAdsSheet extends StatelessWidget {
         children: [
           const SizedBox(height: 12),
           Container(
-            width: 40,
-            height: 4,
+            width: 40, height: 4,
             decoration: BoxDecoration(
               color: AppColors.white20,
               borderRadius: BorderRadius.circular(2),
@@ -132,7 +136,8 @@ class RemoveAdsSheet extends StatelessWidget {
 
           // Header
           ShaderMask(
-            shaderCallback: (r) => AppColors.gradientPrimary.createShader(r),
+            shaderCallback: (r) =>
+                AppColors.gradientPrimary.createShader(r),
             child: const Text('✨ Remove Ads',
                 style: TextStyle(
                     fontSize: 24,
@@ -148,22 +153,28 @@ class RemoveAdsSheet extends StatelessWidget {
                   color: AppColors.white40)),
           const SizedBox(height: 28),
 
-          // Plans
-          if (iap.products.isEmpty && !iap.available) ...[
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('Store unavailable on this device.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontFamily: 'Poppins', color: AppColors.white40)),
-            ),
-          ] else if (iap.products.isEmpty) ...[
-            const SizedBox(
-                height: 40,
-                child: CircularProgressIndicator(
-                    color: AppColors.neonBlue, strokeWidth: 2)),
+          // Plans — always render using store prices when loaded,
+          // fallback to static prices when store hasn't responded yet.
+          // This prevents the spinner-only state seen in the screenshots.
+          if (!iap.available) ...[
+            _UnavailableNote(),
           ] else ...[
-            ...iap.products.map((product) => _PlanTile(product: product)),
+            _PlanTile(
+              productId: AppConstants.iapRemoveAds1Day,
+              storeProduct: iap.productById(AppConstants.iapRemoveAds1Day),
+              iap: iap,
+            ),
+            _PlanTile(
+              productId: AppConstants.iapRemoveAds1Week,
+              storeProduct: iap.productById(AppConstants.iapRemoveAds1Week),
+              iap: iap,
+            ),
+            _PlanTile(
+              productId: AppConstants.iapRemoveAds1Month,
+              storeProduct: iap.productById(AppConstants.iapRemoveAds1Month),
+              iap: iap,
+              isPopular: true,
+            ),
           ],
 
           const SizedBox(height: 16),
@@ -188,21 +199,31 @@ class RemoveAdsSheet extends StatelessWidget {
   }
 }
 
+// ── Plan tile — shows store price when available, static price as fallback ─────
 class _PlanTile extends StatelessWidget {
-  final dynamic product;
-  const _PlanTile({required this.product});
+  final String productId;
+  final dynamic storeProduct; // ProductDetails? from IAP
+  final IapService iap;
+  final bool isPopular;
+
+  const _PlanTile({
+    required this.productId,
+    required this.storeProduct,
+    required this.iap,
+    this.isPopular = false,
+  });
 
   String get _label {
-    switch (product.id) {
+    switch (productId) {
       case AppConstants.iapRemoveAds1Day:   return '1 Day';
       case AppConstants.iapRemoveAds1Week:  return '1 Week';
       case AppConstants.iapRemoveAds1Month: return '1 Month';
-      default: return product.title;
+      default: return productId;
     }
   }
 
   String get _sublabel {
-    switch (product.id) {
+    switch (productId) {
       case AppConstants.iapRemoveAds1Day:   return 'Try it out';
       case AppConstants.iapRemoveAds1Week:  return 'Best value short-term';
       case AppConstants.iapRemoveAds1Month: return '🔥 Most popular';
@@ -210,76 +231,107 @@ class _PlanTile extends StatelessWidget {
     }
   }
 
-  bool get _isPopular => product.id == AppConstants.iapRemoveAds1Month;
+  /// Display price: real store price if loaded, else static fallback.
+  String get _displayPrice =>
+      storeProduct?.price ??
+      AppConstants.iapFallbackPrices[productId] ??
+      '—';
+
+  /// Whether we can actually process a purchase right now.
+  bool get _canBuy => storeProduct != null && !iap.purchasing;
 
   @override
   Widget build(BuildContext context) {
-    final iap = context.watch<IapService>();
-
     return GestureDetector(
-      onTap: iap.purchasing ? null : () => iap.buyProduct(product),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: _isPopular
-              ? LinearGradient(colors: [
-                  AppColors.neonPurple.withOpacity(0.2),
-                  AppColors.neonBlue.withOpacity(0.15),
-                ])
-              : null,
-          color: _isPopular ? null : AppColors.white10,
-          border: Border.all(
-            color: _isPopular
-                ? AppColors.neonPurple.withOpacity(0.5)
-                : AppColors.white20,
-            width: _isPopular ? 1.5 : 1,
+      onTap: _canBuy ? () => iap.buyProduct(storeProduct) : null,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: storeProduct == null ? 0.65 : 1.0,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: isPopular
+                ? LinearGradient(colors: [
+                    AppColors.neonPurple.withOpacity(0.20),
+                    AppColors.neonBlue.withOpacity(0.15),
+                  ])
+                : null,
+            color: isPopular ? null : AppColors.white10,
+            border: Border.all(
+              color: isPopular
+                  ? AppColors.neonPurple.withOpacity(0.50)
+                  : AppColors.white20,
+              width: isPopular ? 1.5 : 1.0,
+            ),
           ),
-        ),
-        child: Row(children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_label,
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontFamily: 'Poppins',
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.white)),
-              if (_sublabel.isNotEmpty)
-                Text(_sublabel,
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontFamily: 'Poppins',
-                        color: _isPopular
-                            ? AppColors.neonPurple
-                            : AppColors.white40)),
-            ]),
-          ),
-          if (iap.purchasing)
-            const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.neonBlue))
-          else
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                gradient: _isPopular ? AppColors.gradientPrimary : null,
-                color: _isPopular ? null : AppColors.white20,
+          child: Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_label,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontFamily: 'Poppins',
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.white)),
+                  if (_sublabel.isNotEmpty)
+                    Text(_sublabel,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontFamily: 'Poppins',
+                            color: isPopular
+                                ? AppColors.neonPurple
+                                : AppColors.white40)),
+                ],
               ),
-              child: Text(product.price,
+            ),
+            // Show spinner only while a purchase is actively processing
+            if (iap.purchasing && storeProduct != null)
+              const SizedBox(
+                width: 22, height: 22,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.neonBlue),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: isPopular ? AppColors.gradientPrimary : null,
+                  color: isPopular ? null : AppColors.white20,
+                ),
+                child: Text(
+                  _displayPrice,
                   style: TextStyle(
                       fontSize: 13,
                       fontFamily: 'Poppins',
                       fontWeight: FontWeight.w700,
-                      color:
-                          _isPopular ? Colors.white : AppColors.white)),
-            ),
-        ]),
+                      color: isPopular ? Colors.white : AppColors.white),
+                ),
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _UnavailableNote extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Text(
+        'In-app purchases are not available\non this device.',
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+            fontFamily: 'Poppins',
+            color: AppColors.white40,
+            fontSize: 13),
       ),
     );
   }

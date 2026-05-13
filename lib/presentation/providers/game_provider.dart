@@ -41,11 +41,12 @@ class GameProvider extends ChangeNotifier {
   int _moves = 0;
   int get moves => _moves;
 
-  int _maxMoves = 30;
+  int _maxMoves = 20;
   int get maxMoves => _maxMoves;
   int get movesRemaining => (_maxMoves - _moves).clamp(0, _maxMoves);
   bool get isMovesLow =>
-      movesRemaining <= AppConstants.lowMovesWarning && _status == GameStatus.playing;
+      movesRemaining <= AppConstants.lowMovesWarning &&
+      _status == GameStatus.playing;
   bool get isOutOfMoves => movesRemaining <= 0;
 
   int _stars = 0;
@@ -63,7 +64,8 @@ class GameProvider extends ChangeNotifier {
   int _dailyStreak = 0;
   int get dailyStreak => _dailyStreak;
 
-  int _hints = 3;
+  // Starts at initialHints (2) for every fresh install
+  int _hints = AppConstants.initialHints;
   int get hints => _hints;
 
   int _currentLevelId = 0;
@@ -71,15 +73,16 @@ class GameProvider extends ChangeNotifier {
   bool _isHinting = false;
   int? _hintFromIndex;
   int? _hintToIndex;
-  bool get isHinting => _isHinting;
-  int? get hintFrom => _hintFromIndex;
-  int? get hintTo => _hintToIndex;
+  bool get isHinting  => _isHinting;
+  int? get hintFrom   => _hintFromIndex;
+  int? get hintTo     => _hintToIndex;
 
   PourEvent? _currentPour;
   PourEvent? get currentPour => _currentPour;
   bool _isPouring = false;
   bool get isPouring => _isPouring;
 
+  // ── Init ────────────────────────────────────────────────────────────────────
   Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -88,7 +91,9 @@ class GameProvider extends ChangeNotifier {
       _totalLevelsCompleted =
           prefs.getInt(AppConstants.keyTotalLevelsCompleted) ?? 0;
       _dailyStreak = prefs.getInt(AppConstants.keyDailyStreak) ?? 0;
-      _hints = prefs.getInt(AppConstants.keyTotalHints) ?? 3;
+      // Use persisted hints; fall back to initialHints (2) for new installs
+      _hints = prefs.getInt(AppConstants.keyTotalHints) ??
+          AppConstants.initialHints;
       _updateStreak(prefs);
     } catch (_) {}
 
@@ -102,23 +107,23 @@ class GameProvider extends ChangeNotifier {
   void _loadLevelInternal(int globalId) {
     final idx = globalId.clamp(0, _allLevels.length - 1);
     final lvl = _allLevels[idx];
-    _currentLevelId = idx;
-    _currentWorldIndex = lvl.worldId;
-    _currentLevelInWorld = lvl.levelInWorld;
-    _maxMoves = lvl.maxMoves;
+    _currentLevelId        = idx;
+    _currentWorldIndex     = lvl.worldId;
+    _currentLevelInWorld   = lvl.levelInWorld;
+    _maxMoves              = lvl.maxMoves;
     _tubes = lvl.initialState
-        .map((colors) => TubeModel(colors: List<int>.from(colors)))
+        .map((c) => TubeModel(colors: List<int>.from(c)))
         .toList();
-    _selectedIndex = null;
+    _selectedIndex  = null;
+    _moves          = 0;
+    _stars          = 0;
+    _status         = GameStatus.playing;
+    _isHinting      = false;
+    _hintFromIndex  = null;
+    _hintToIndex    = null;
+    _currentPour    = null;
+    _isPouring      = false;
     _undoStack.clear();
-    _moves = 0;
-    _stars = 0;
-    _status = GameStatus.playing;
-    _isHinting = false;
-    _hintFromIndex = null;
-    _hintToIndex = null;
-    _currentPour = null;
-    _isPouring = false;
     notifyListeners();
     _audio.playLevelStart().catchError((_) {});
   }
@@ -134,10 +139,11 @@ class GameProvider extends ChangeNotifier {
   }
 
   void nextLevel() {
-    final nextId = _currentLevelId + 1;
-    if (nextId < _allLevels.length) loadLevel(nextId);
+    final next = _currentLevelId + 1;
+    if (next < _allLevels.length) loadLevel(next);
   }
 
+  // ── Tube selection & pour ───────────────────────────────────────────────────
   void selectTube(int index) {
     if (_status != GameStatus.playing) return;
     if (_isPouring) return;
@@ -146,8 +152,8 @@ class GameProvider extends ChangeNotifier {
     _audio.playTap().catchError((_) {});
 
     if (_selectedIndex == null) {
-      if (_tubes[index].isEmpty) return;
-      if (_tubes[index].isPerfect) return;
+      if (_tubes[index].isEmpty)    return;
+      if (_tubes[index].isPerfect)  return;
       _selectedIndex = index;
       _tubes[index] = _tubes[index].copyWith(isSelected: true);
       _tryHaptic(HapticFeedback.selectionClick);
@@ -163,7 +169,7 @@ class GameProvider extends ChangeNotifier {
     }
 
     final from = _tubes[_selectedIndex!];
-    final to = _tubes[index];
+    final to   = _tubes[index];
 
     if (to.canReceive(from)) {
       _initiatePour(_selectedIndex!, index);
@@ -183,17 +189,17 @@ class GameProvider extends ChangeNotifier {
   }
 
   void _initiatePour(int fromIdx, int toIdx) {
-    final from = _tubes[fromIdx];
-    final topColor = from.topColor!;
-    final topCount = from.topColorCount;
-    final canFit = _tubes[toIdx].capacity - _tubes[toIdx].colors.length;
+    final from      = _tubes[fromIdx];
+    final topColor  = from.topColor!;
+    final topCount  = from.topColorCount;
+    final canFit    = _tubes[toIdx].capacity - _tubes[toIdx].colors.length;
     final moveCount = min(topCount, canFit);
 
     _currentPour = PourEvent(
       fromIndex: fromIdx,
-      toIndex: toIdx,
-      color: topColor,
-      count: moveCount,
+      toIndex:   toIdx,
+      color:     topColor,
+      count:     moveCount,
     );
     _isPouring = true;
     notifyListeners();
@@ -204,22 +210,24 @@ class GameProvider extends ChangeNotifier {
   }
 
   void _commitPour(int fromIdx, int toIdx, int moveCount, int topColor) {
+    // Save undo snapshot
     _undoStack.add(_tubes
         .map((t) => t.copyWith(
             colors: List<int>.from(t.colors), isSelected: false))
         .toList());
-    if (_undoStack.length > 30) _undoStack.removeAt(0);
+    if (_undoStack.length > AppConstants.maxUndoStack) _undoStack.removeAt(0);
 
     final newFrom = List<int>.from(_tubes[fromIdx].colors);
-    final newTo = List<int>.from(_tubes[toIdx].colors);
+    final newTo   = List<int>.from(_tubes[toIdx].colors);
     for (int i = 0; i < moveCount; i++) {
       newFrom.removeLast();
       newTo.add(topColor);
     }
 
-    final newToTube = TubeModel(colors: newTo, capacity: _tubes[toIdx].capacity);
-    _tubes[fromIdx] = _tubes[fromIdx].copyWith(
-        colors: newFrom, isSelected: false);
+    final newToTube = TubeModel(
+        colors: newTo, capacity: _tubes[toIdx].capacity);
+    _tubes[fromIdx] =
+        _tubes[fromIdx].copyWith(colors: newFrom, isSelected: false);
     _tubes[toIdx] = newToTube.isPerfect
         ? newToTube.copyWith(isCompleted: true)
         : newToTube;
@@ -227,18 +235,17 @@ class GameProvider extends ChangeNotifier {
     _selectedIndex = null;
     _moves++;
     _currentPour = null;
-    _isPouring = false;
+    _isPouring   = false;
 
     _audio.playPour().catchError((_) {});
     _tryHaptic(HapticFeedback.lightImpact);
-
     if (_tubes[toIdx].isCompleted) {
       _audio.playChime().catchError((_) {});
     }
 
     _checkWin();
 
-    // Check move limit — only trigger game over if not won
+    // Out of moves and not yet won → game over
     if (_status == GameStatus.playing && isOutOfMoves) {
       _status = GameStatus.gameOver;
       _audio.playError().catchError((_) {});
@@ -260,56 +267,58 @@ class GameProvider extends ChangeNotifier {
   }
 
   int _calculateStars() {
-    final lvl = _allLevels[_currentLevelId];
-    final optimal = lvl.colorCount * 4;
-    if (_moves <= optimal) return 3;
-    if (_moves <= (optimal * 1.6).round()) return 2;
+    final optimal = _allLevels[_currentLevelId].colorCount * 4;
+    if (_moves <= optimal)                    return 3;
+    if (_moves <= (optimal * 1.6).round())    return 2;
     return 1;
   }
 
+  // ── Undo ────────────────────────────────────────────────────────────────────
   void undo() {
     if (_undoStack.isEmpty) return;
-    _tubes = _undoStack.removeLast();
+    _tubes         = _undoStack.removeLast();
     _selectedIndex = null;
-    _moves = max(0, _moves - 1);
-    _status = GameStatus.playing;
-    _isPouring = false;
-    _currentPour = null;
+    _moves         = max(0, _moves - 1);
+    _status        = GameStatus.playing;
+    _isPouring     = false;
+    _currentPour   = null;
     _audio.playClick().catchError((_) {});
     _tryHaptic(HapticFeedback.selectionClick);
     notifyListeners();
   }
 
-  /// Auto-executes the best available move (used by hint button)
+  void addUndoFromAd() {
+    if (_undoStack.isNotEmpty) undo();
+  }
+
+  // ── Hint — auto-executes best move ──────────────────────────────────────────
   void useHint() {
     if (_status != GameStatus.playing) return;
-    if (_hints <= 0) return;
-    if (_isPouring) return;
+    if (_hints <= 0)   return;
+    if (_isPouring)    return;
 
     final move = _findBestMove();
     if (move == null) return;
 
     _hints--;
     _hintFromIndex = move[0];
-    _hintToIndex = move[1];
-    _isHinting = true;
+    _hintToIndex   = move[1];
+    _isHinting     = true;
     _audio.playClick().catchError((_) {});
     notifyListeners();
 
     // Brief highlight then auto-execute
     Future.delayed(const Duration(milliseconds: 600), () {
       if (!_isHinting) return;
-      _isHinting = false;
+      _isHinting     = false;
       _hintFromIndex = null;
-      _hintToIndex = null;
-      // Deselect anything
+      _hintToIndex   = null;
       for (int i = 0; i < _tubes.length; i++) {
         if (_tubes[i].isSelected) {
           _tubes[i] = _tubes[i].copyWith(isSelected: false);
         }
       }
       _selectedIndex = null;
-      // Execute the move
       _initiatePour(move[0], move[1]);
     });
   }
@@ -321,9 +330,9 @@ class GameProvider extends ChangeNotifier {
       for (int t = 0; t < _tubes.length; t++) {
         if (f == t) continue;
         if (_tubes[t].canReceive(_tubes[f])) {
-          final newCount =
+          final after =
               _tubes[t].colors.length + _tubes[f].topColorCount;
-          if (newCount == _tubes[t].capacity) return [f, t];
+          if (after == _tubes[t].capacity) return [f, t];
         }
       }
     }
@@ -344,36 +353,30 @@ class GameProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Add extra moves from a rewarded ad
+  // ── Extra moves from rewarded ad ────────────────────────────────────────────
   void addExtraMoves(int count) {
     _maxMoves += count;
-    if (_status == GameStatus.gameOver) {
-      _status = GameStatus.playing;
-    }
+    if (_status == GameStatus.gameOver) _status = GameStatus.playing;
     _audio.playClick().catchError((_) {});
     notifyListeners();
   }
 
-  void addUndoFromAd() {
-    if (_undoStack.isNotEmpty) undo();
-  }
-
+  // ── Persistence ─────────────────────────────────────────────────────────────
   Future<void> _saveProgress() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(AppConstants.keyCurrentWorld, _currentWorldIndex);
-      await prefs.setInt(AppConstants.keyCurrentLevel, _currentLevelInWorld);
-      await prefs.setInt(
-          AppConstants.keyTotalLevelsCompleted, _totalLevelsCompleted);
-      await prefs.setInt(AppConstants.keyTotalHints, _hints);
+      await prefs.setInt(AppConstants.keyCurrentWorld,         _currentWorldIndex);
+      await prefs.setInt(AppConstants.keyCurrentLevel,         _currentLevelInWorld);
+      await prefs.setInt(AppConstants.keyTotalLevelsCompleted, _totalLevelsCompleted);
+      await prefs.setInt(AppConstants.keyTotalHints,           _hints);
     } catch (_) {}
   }
 
   void _updateStreak(SharedPreferences prefs) {
     try {
-      final today = DateTime.now();
+      final today    = DateTime.now();
       final todayStr = '${today.year}-${today.month}-${today.day}';
-      final lastStr = prefs.getString(AppConstants.keyLastPlayDate);
+      final lastStr  = prefs.getString(AppConstants.keyLastPlayDate);
       if (lastStr == null) {
         prefs.setString(AppConstants.keyLastPlayDate, todayStr);
         return;
@@ -381,15 +384,13 @@ class GameProvider extends ChangeNotifier {
       if (lastStr == todayStr) return;
       final last = DateTime.tryParse(lastStr);
       if (last != null) {
-        final diff = today.difference(last).inDays;
+        final diff  = today.difference(last).inDays;
         _dailyStreak = diff == 1 ? _dailyStreak + 1 : 1;
       }
-      prefs.setInt(AppConstants.keyDailyStreak, _dailyStreak);
+      prefs.setInt(AppConstants.keyDailyStreak,    _dailyStreak);
       prefs.setString(AppConstants.keyLastPlayDate, todayStr);
     } catch (_) {}
   }
 
-  void _tryHaptic(Future<void> Function() fn) {
-    fn().catchError((_) {});
-  }
+  void _tryHaptic(Future<void> Function() fn) => fn().catchError((_) {});
 }

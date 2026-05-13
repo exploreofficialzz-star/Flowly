@@ -4,10 +4,10 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 enum NetworkState {
-  connected,   // radio up + real data flowing
-  noInternet,  // no radio at all (WiFi off, airplane mode, no SIM)
-  noData,      // radio shows connected but data can't reach the internet
-               // (captive portal, data-plan exhausted, carrier issue)
+  connected,   // radio up + real TCP/HTTP data confirmed
+  noInternet,  // no radio (WiFi off, airplane mode, no SIM)
+  noData,      // radio shows connected but data cannot actually flow
+               // (captive portal, data plan exhausted, carrier block)
 }
 
 class ConnectivityService extends ChangeNotifier {
@@ -18,27 +18,21 @@ class ConnectivityService extends ChangeNotifier {
   NetworkState _state = NetworkState.connected;
   NetworkState get state => _state;
 
-  bool get isConnected  => _state == NetworkState.connected;
+  bool get isConnected   => _state == NetworkState.connected;
   bool get hasNoInternet => _state == NetworkState.noInternet;
   bool get hasNoData     => _state == NetworkState.noData;
 
   StreamSubscription<List<ConnectivityResult>>? _radioSub;
-  Timer? _deepCheckTimer;
+  Timer? _pollTimer;
   bool _inCheck = false;
 
-  /// Call once from main() before runApp.
   Future<void> init() async {
-    // Immediate baseline check
     await _check();
-
-    // React to every radio change
     _radioSub = Connectivity()
         .onConnectivityChanged
         .listen((_) => _check());
-
-    // Deep data-reachability poll every 12 s
-    _deepCheckTimer =
-        Timer.periodic(const Duration(seconds: 12), (_) => _check());
+    // Re-probe every 8 s — short enough to feel instant, light on battery
+    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _check());
   }
 
   Future<void> recheck() => _check();
@@ -47,6 +41,7 @@ class ConnectivityService extends ChangeNotifier {
     if (_inCheck) return;
     _inCheck = true;
     try {
+      // ── Step 1: radio-level check (fast, no data needed) ──────────────────
       final results = await Connectivity().checkConnectivity();
       final hasRadio = results.any((r) =>
           r == ConnectivityResult.wifi ||
@@ -59,15 +54,19 @@ class ConnectivityService extends ChangeNotifier {
         return;
       }
 
-      // Radio is up — verify actual data with a two-target probe.
-      // We try two independent hosts; if EITHER responds we consider data up.
-      // This avoids false-positives caused by a single host being temporarily down.
-      final results2 = await Future.wait([
-        _probe('google.com'),
-        _probe('1.1.1.1'), // Cloudflare — DNS-over-IP, bypasses DNS spoofing
+      // ── Step 2: real data probe — TCP connect to known IPs ────────────────
+      // Using raw TCP to well-known addresses confirms data actually flows
+      // without relying on DNS (which can be spoofed or ad-blocked).
+      //   8.8.8.8:53  → Google Public DNS (TCP)
+      //   1.1.1.1:443 → Cloudflare HTTPS port
+      //   142.250.80.46:80 → Google HTTP (hardcoded IP, no DNS needed)
+      final probeResults = await Future.wait([
+        _tcpProbe('8.8.8.8', 53),
+        _tcpProbe('1.1.1.1', 443),
+        _httpProbe(), // Android-native connectivity check endpoint
       ]);
 
-      final hasData = results2.any((ok) => ok);
+      final hasData = probeResults.any((ok) => ok);
       _set(hasData ? NetworkState.connected : NetworkState.noData);
     } catch (_) {
       _set(NetworkState.noInternet);
@@ -76,13 +75,46 @@ class ConnectivityService extends ChangeNotifier {
     }
   }
 
-  Future<bool> _probe(String host) async {
+  /// TCP socket connect — verifies actual Layer-4 connectivity.
+  /// Returns true if a socket can be established within the timeout.
+  Future<bool> _tcpProbe(String host, int port) async {
+    Socket? socket;
     try {
-      final addrs = await InternetAddress.lookup(host)
-          .timeout(const Duration(seconds: 4));
-      return addrs.isNotEmpty && addrs.first.rawAddress.isNotEmpty;
+      socket = await Socket.connect(
+        host,
+        port,
+        timeout: const Duration(seconds: 4),
+      );
+      return true;
     } catch (_) {
       return false;
+    } finally {
+      try { socket?.destroy(); } catch (_) {}
+    }
+  }
+
+  /// HTTP probe against Android's built-in connectivity check URL.
+  /// Returns 204 No Content on a live connection; redirect/error on captive
+  /// portal or no data. This is exactly what Android uses internally.
+  Future<bool> _httpProbe() async {
+    HttpClient? client;
+    try {
+      client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 4)
+        ..idleTimeout       = const Duration(seconds: 4);
+      final req = await client
+          .getUrl(Uri.parse(
+              'http://connectivitycheck.gstatic.com/generate_204'))
+          .timeout(const Duration(seconds: 4));
+      req.headers.set(HttpHeaders.connectionHeader, 'close');
+      final res = await req.close().timeout(const Duration(seconds: 4));
+      await res.drain<void>();
+      // 204 = fully connected, 200 = captive portal page = treat as no data
+      return res.statusCode == 204;
+    } catch (_) {
+      return false;
+    } finally {
+      try { client?.close(force: true); } catch (_) {}
     }
   }
 
@@ -95,7 +127,7 @@ class ConnectivityService extends ChangeNotifier {
   @override
   void dispose() {
     _radioSub?.cancel();
-    _deepCheckTimer?.cancel();
+    _pollTimer?.cancel();
     super.dispose();
   }
 }
