@@ -7,9 +7,8 @@ import '../../data/levels/level_generator.dart';
 import '../../services/audio_service.dart';
 import '../../core/constants/app_constants.dart';
 
-enum GameStatus { idle, playing, won }
+enum GameStatus { idle, playing, won, gameOver }
 
-// Holds data about the current pour in progress
 class PourEvent {
   final int fromIndex;
   final int toIndex;
@@ -42,6 +41,13 @@ class GameProvider extends ChangeNotifier {
   int _moves = 0;
   int get moves => _moves;
 
+  int _maxMoves = 30;
+  int get maxMoves => _maxMoves;
+  int get movesRemaining => (_maxMoves - _moves).clamp(0, _maxMoves);
+  bool get isMovesLow =>
+      movesRemaining <= AppConstants.lowMovesWarning && _status == GameStatus.playing;
+  bool get isOutOfMoves => movesRemaining <= 0;
+
   int _stars = 0;
   int get stars => _stars;
 
@@ -69,7 +75,6 @@ class GameProvider extends ChangeNotifier {
   int? get hintFrom => _hintFromIndex;
   int? get hintTo => _hintToIndex;
 
-  // Pour animation state — UI reads this to play the pour effect
   PourEvent? _currentPour;
   PourEvent? get currentPour => _currentPour;
   bool _isPouring = false;
@@ -100,6 +105,7 @@ class GameProvider extends ChangeNotifier {
     _currentLevelId = idx;
     _currentWorldIndex = lvl.worldId;
     _currentLevelInWorld = lvl.levelInWorld;
+    _maxMoves = lvl.maxMoves;
     _tubes = lvl.initialState
         .map((colors) => TubeModel(colors: List<int>.from(colors)))
         .toList();
@@ -134,7 +140,7 @@ class GameProvider extends ChangeNotifier {
 
   void selectTube(int index) {
     if (_status != GameStatus.playing) return;
-    if (_isPouring) return; // block input during pour animation
+    if (_isPouring) return;
     if (index < 0 || index >= _tubes.length) return;
 
     _audio.playTap().catchError((_) {});
@@ -183,7 +189,6 @@ class GameProvider extends ChangeNotifier {
     final canFit = _tubes[toIdx].capacity - _tubes[toIdx].colors.length;
     final moveCount = min(topCount, canFit);
 
-    // Set pour event so UI can animate
     _currentPour = PourEvent(
       fromIndex: fromIdx,
       toIndex: toIdx,
@@ -193,14 +198,12 @@ class GameProvider extends ChangeNotifier {
     _isPouring = true;
     notifyListeners();
 
-    // After animation duration, commit the move
     Future.delayed(const Duration(milliseconds: 700), () {
       _commitPour(fromIdx, toIdx, moveCount, topColor);
     });
   }
 
   void _commitPour(int fromIdx, int toIdx, int moveCount, int topColor) {
-    // Snapshot for undo
     _undoStack.add(_tubes
         .map((t) => t.copyWith(
             colors: List<int>.from(t.colors), isSelected: false))
@@ -234,6 +237,14 @@ class GameProvider extends ChangeNotifier {
     }
 
     _checkWin();
+
+    // Check move limit — only trigger game over if not won
+    if (_status == GameStatus.playing && isOutOfMoves) {
+      _status = GameStatus.gameOver;
+      _audio.playError().catchError((_) {});
+      _tryHaptic(HapticFeedback.heavyImpact);
+    }
+
     notifyListeners();
   }
 
@@ -269,27 +280,42 @@ class GameProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Auto-executes the best available move (used by hint button)
   void useHint() {
+    if (_status != GameStatus.playing) return;
     if (_hints <= 0) return;
+    if (_isPouring) return;
+
     final move = _findBestMove();
     if (move == null) return;
+
     _hints--;
     _hintFromIndex = move[0];
     _hintToIndex = move[1];
     _isHinting = true;
     _audio.playClick().catchError((_) {});
     notifyListeners();
-    Future.delayed(const Duration(seconds: 2), () {
-      if (_isHinting) {
-        _isHinting = false;
-        _hintFromIndex = null;
-        _hintToIndex = null;
-        notifyListeners();
+
+    // Brief highlight then auto-execute
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (!_isHinting) return;
+      _isHinting = false;
+      _hintFromIndex = null;
+      _hintToIndex = null;
+      // Deselect anything
+      for (int i = 0; i < _tubes.length; i++) {
+        if (_tubes[i].isSelected) {
+          _tubes[i] = _tubes[i].copyWith(isSelected: false);
+        }
       }
+      _selectedIndex = null;
+      // Execute the move
+      _initiatePour(move[0], move[1]);
     });
   }
 
   List<int>? _findBestMove() {
+    // Prefer moves that complete a tube
     for (int f = 0; f < _tubes.length; f++) {
       if (_tubes[f].isEmpty) continue;
       for (int t = 0; t < _tubes.length; t++) {
@@ -301,6 +327,7 @@ class GameProvider extends ChangeNotifier {
         }
       }
     }
+    // Any valid move
     for (int f = 0; f < _tubes.length; f++) {
       if (_tubes[f].isEmpty) continue;
       for (int t = 0; t < _tubes.length; t++) {
@@ -314,6 +341,16 @@ class GameProvider extends ChangeNotifier {
   void addHints(int count) {
     _hints += count;
     _saveProgress();
+    notifyListeners();
+  }
+
+  /// Add extra moves from a rewarded ad
+  void addExtraMoves(int count) {
+    _maxMoves += count;
+    if (_status == GameStatus.gameOver) {
+      _status = GameStatus.playing;
+    }
+    _audio.playClick().catchError((_) {});
     notifyListeners();
   }
 

@@ -68,6 +68,7 @@ class LevelConfig {
   final int colorCount;
   final List<List<int>> initialState;
   final String difficulty;
+  final int maxMoves;
 
   const LevelConfig({
     required this.id,
@@ -78,5 +79,6 @@ class LevelConfig {
     required this.colorCount,
     required this.initialState,
     required this.difficulty,
+    required this.maxMoves,
   });
 }

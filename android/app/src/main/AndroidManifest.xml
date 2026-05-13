@@ -1,20 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Network permissions required for ads, connectivity checks, and IAP -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+
+    <!-- Required for Google Play Billing (IAP) -->
+    <uses-permission android:name="com.android.vending.BILLING"/>
 
     <application
         android:label="Flowly"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true"
-        android:hardwareAccelerated="true">
+        android:hardwareAccelerated="true"
+        android:requestLegacyExternalStorage="false">
 
-        <!-- AdMob App ID — replace with real ID before release -->
+        <!-- ── AdMob App ID (LIVE — Android) ──────────────────────────── -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713"/>
+            android:value="ca-app-pub-2492078126313994~8748208382"/>
+
+        <!-- Optimise cold-start AdMob initialisation -->
+        <meta-data
+            android:name="com.google.android.gms.ads.DELAY_APP_MEASUREMENT_INIT"
+            android:value="true"/>
 
         <activity
             android:name=".MainActivity"
