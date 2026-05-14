@@ -42,7 +42,7 @@ flutter_launcher_icons:
 
 flutter_native_splash:
   color: "#0A0E23"
-  image: assets/images/splash.png
+  image: assets/images/icon_1024.png
   android: true
   ios: true
   fullscreen: true
