@@ -12,7 +12,6 @@ class RemoveAdsBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final iap = context.watch<IapService>();
 
-    // Already purchased — show expiry confirmation
     if (iap.adsRemoved) {
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -41,7 +40,6 @@ class RemoveAdsBanner extends StatelessWidget {
       );
     }
 
-    // Not purchased — show upsell banner
     return GestureDetector(
       onTap: () => RemoveAdsSheet.show(context),
       child: Container(
@@ -49,12 +47,10 @@ class RemoveAdsBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: LinearGradient(
-            colors: [
-              AppColors.neonPurple.withOpacity(0.15),
-              AppColors.neonBlue.withOpacity(0.12),
-            ],
-          ),
+          gradient: LinearGradient(colors: [
+            AppColors.neonPurple.withOpacity(0.15),
+            AppColors.neonBlue.withOpacity(0.12),
+          ]),
           border: Border.all(
               color: AppColors.neonPurple.withOpacity(0.35), width: 1.5),
         ),
@@ -96,7 +92,7 @@ class RemoveAdsBanner extends StatelessWidget {
 }
 
 // ── Bottom sheet ───────────────────────────────────────────────────────────────
-class RemoveAdsSheet extends StatelessWidget {
+class RemoveAdsSheet extends StatefulWidget {
   const RemoveAdsSheet({super.key});
 
   static Future<void> show(BuildContext context) {
@@ -112,8 +108,47 @@ class RemoveAdsSheet extends StatelessWidget {
   }
 
   @override
+  State<RemoveAdsSheet> createState() => _RemoveAdsSheetState();
+}
+
+class _RemoveAdsSheetState extends State<RemoveAdsSheet> {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pop sheet automatically when purchase succeeds
+    final iap = context.read<IapService>();
+    if (iap.adsRemoved && Navigator.canPop(context)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final iap = context.watch<IapService>();
+
+    // Show error snackbar when a purchase fails
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (iap.purchaseState == IapPurchaseState.error &&
+          iap.purchaseError != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(iap.purchaseError!,
+              style: const TextStyle(fontFamily: 'Poppins')),
+          backgroundColor: AppColors.neonRed,
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'OK',
+            textColor: Colors.white,
+            onPressed: () {
+              iap.clearError();
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            },
+          ),
+        ));
+      }
+    });
 
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
@@ -151,14 +186,18 @@ class RemoveAdsSheet extends StatelessWidget {
                   fontSize: 13,
                   fontFamily: 'Poppins',
                   color: AppColors.white40)),
-          const SizedBox(height: 28),
+          const SizedBox(height: 20),
 
-          // Plans — always render using store prices when loaded,
-          // fallback to static prices when store hasn't responded yet.
-          // This prevents the spinner-only state seen in the screenshots.
-          if (!iap.available) ...[
-            _UnavailableNote(),
-          ] else ...[
+          // Pending banner
+          if (iap.purchaseState == IapPurchaseState.pending)
+            _PendingBanner(),
+
+          const SizedBox(height: 8),
+
+          // Plans
+          if (!iap.available)
+            _UnavailableNote()
+          else ...[
             _PlanTile(
               productId: AppConstants.iapRemoveAds1Day,
               storeProduct: iap.productById(AppConstants.iapRemoveAds1Day),
@@ -193,16 +232,59 @@ class RemoveAdsSheet extends StatelessWidget {
                       decorationColor: AppColors.white40)),
             ),
           ),
+
+          const SizedBox(height: 6),
+          const Text(
+            'Purchases are time-limited and renew manually.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: 10, fontFamily: 'Poppins', color: AppColors.white20),
+          ),
         ],
       ),
     );
   }
 }
 
-// ── Plan tile — shows store price when available, static price as fallback ─────
+// ── Pending banner ─────────────────────────────────────────────────────────────
+class _PendingBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: AppColors.neonBlue.withOpacity(0.08),
+        border:
+            Border.all(color: AppColors.neonBlue.withOpacity(0.35)),
+      ),
+      child: const Row(children: [
+        SizedBox(
+          width: 16, height: 16,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: AppColors.neonBlue),
+        ),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Payment is being processed…\nThis may take a moment.',
+            style: TextStyle(
+                fontSize: 12,
+                fontFamily: 'Poppins',
+                color: AppColors.neonBlue,
+                height: 1.5),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Plan tile ──────────────────────────────────────────────────────────────────
 class _PlanTile extends StatelessWidget {
   final String productId;
-  final dynamic storeProduct; // ProductDetails? from IAP
+  final dynamic storeProduct;
   final IapService iap;
   final bool isPopular;
 
@@ -218,7 +300,7 @@ class _PlanTile extends StatelessWidget {
       case AppConstants.iapRemoveAds1Day:   return '1 Day';
       case AppConstants.iapRemoveAds1Week:  return '1 Week';
       case AppConstants.iapRemoveAds1Month: return '1 Month';
-      default: return productId;
+      default:                              return productId;
     }
   }
 
@@ -227,26 +309,28 @@ class _PlanTile extends StatelessWidget {
       case AppConstants.iapRemoveAds1Day:   return 'Try it out';
       case AppConstants.iapRemoveAds1Week:  return 'Best value short-term';
       case AppConstants.iapRemoveAds1Month: return '🔥 Most popular';
-      default: return '';
+      default:                              return '';
     }
   }
 
-  /// Display price: real store price if loaded, else static fallback.
   String get _displayPrice =>
       storeProduct?.price ??
       AppConstants.iapFallbackPrices[productId] ??
       '—';
 
-  /// Whether we can actually process a purchase right now.
-  bool get _canBuy => storeProduct != null && !iap.purchasing;
+  bool get _canBuy =>
+      storeProduct != null &&
+      iap.purchaseState == IapPurchaseState.idle;
 
   @override
   Widget build(BuildContext context) {
+    final isActivelyBuying = iap.purchasing && storeProduct != null;
+
     return GestureDetector(
       onTap: _canBuy ? () => iap.buyProduct(storeProduct) : null,
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 200),
-        opacity: storeProduct == null ? 0.65 : 1.0,
+        opacity: (!_canBuy && !isActivelyBuying) ? 0.6 : 1.0,
         child: Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(16),
@@ -288,31 +372,30 @@ class _PlanTile extends StatelessWidget {
                 ],
               ),
             ),
-            // Show spinner only while a purchase is actively processing
-            if (iap.purchasing && storeProduct != null)
-              const SizedBox(
-                width: 22, height: 22,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.neonBlue),
-              )
-            else
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  gradient: isPopular ? AppColors.gradientPrimary : null,
-                  color: isPopular ? null : AppColors.white20,
-                ),
-                child: Text(
-                  _displayPrice,
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontFamily: 'Poppins',
-                      fontWeight: FontWeight.w700,
-                      color: isPopular ? Colors.white : AppColors.white),
-                ),
-              ),
+            isActivelyBuying
+                ? const SizedBox(
+                    width: 22, height: 22,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.neonBlue))
+                : Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      gradient:
+                          isPopular ? AppColors.gradientPrimary : null,
+                      color: isPopular ? null : AppColors.white20,
+                    ),
+                    child: Text(
+                      _displayPrice,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontFamily: 'Poppins',
+                          fontWeight: FontWeight.w700,
+                          color:
+                              isPopular ? Colors.white : AppColors.white),
+                    ),
+                  ),
           ]),
         ),
       ),
@@ -322,17 +405,15 @@ class _PlanTile extends StatelessWidget {
 
 class _UnavailableNote extends StatelessWidget {
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 24),
-      child: Text(
-        'In-app purchases are not available\non this device.',
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-            fontFamily: 'Poppins',
-            color: AppColors.white40,
-            fontSize: 13),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Text(
+          'In-app purchases are not\navailable on this device.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+              fontFamily: 'Poppins',
+              color: AppColors.white40,
+              fontSize: 13),
+        ),
+      );
 }
