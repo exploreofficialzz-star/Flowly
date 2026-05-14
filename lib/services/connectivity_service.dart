@@ -4,10 +4,16 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 enum NetworkState {
-  connected,   // radio up + real TCP/HTTP data confirmed
-  noInternet,  // no radio (WiFi off, airplane mode, no SIM)
-  noData,      // radio shows connected but data cannot actually flow
-               // (captive portal, data plan exhausted, carrier block)
+  connected,   // good signal + data confirmed
+  weak,        // data flows but slow / packet-lossy
+  noData,      // radio up but zero real data flowing
+  noInternet,  // no radio at all (airplane / WiFi off / no SIM)
+}
+
+class _ProbeResult {
+  final bool   success;
+  final int    latencyMs;
+  const _ProbeResult({required this.success, required this.latencyMs});
 }
 
 class ConnectivityService extends ChangeNotifier {
@@ -19,20 +25,46 @@ class ConnectivityService extends ChangeNotifier {
   NetworkState get state => _state;
 
   bool get isConnected   => _state == NetworkState.connected;
-  bool get hasNoInternet => _state == NetworkState.noInternet;
+  bool get isWeak        => _state == NetworkState.weak;
   bool get hasNoData     => _state == NetworkState.noData;
+  bool get hasNoInternet => _state == NetworkState.noInternet;
+  bool get isBlocking    => _state != NetworkState.connected;
 
   StreamSubscription<List<ConnectivityResult>>? _radioSub;
   Timer? _pollTimer;
-  bool _inCheck = false;
+  bool  _inCheck = false;
+
+  // ── Seven endpoints across FOUR independent providers ─────────────────────
+  // • Google  (Android's own connectivity check — returns 204 on success)
+  // • Apple   (returns 200 + short HTML body)
+  // • Microsoft (returns literal text "Microsoft Connect Test")
+  // • Cloudflare (one.one.one.one landing page)
+  //
+  // Using HTTP (not HTTPS) where possible so TLS handshake latency doesn't
+  // inflate RTT and give false "weak" readings.
+  static const _probeTargets = [
+    'http://connectivitycheck.gstatic.com/generate_204',   // Google Android ①
+    'http://www.google.com/generate_204',                   // Google ②
+    'https://clients3.google.com/generate_204',             // Google ③
+    'http://connectivitycheck.android.com/generate_204',    // AOSP ④
+    'http://captive.apple.com/hotspot-detect.html',         // Apple ⑤
+    'http://www.msftconnecttest.com/connecttest.txt',        // Microsoft ⑥
+    'https://one.one.one.one/',                              // Cloudflare ⑦
+  ];
+
+  // Thresholds
+  static const _weakLatencyMs   = 3000; // median RTT above this → weak
+  static const _weakSuccessRate = 0.40; // fewer than 40 % probes succeed → weak
+  static const _probeTimeoutMs  = 5000;
 
   Future<void> init() async {
     await _check();
     _radioSub = Connectivity()
         .onConnectivityChanged
         .listen((_) => _check());
-    // Re-probe every 8 s — short enough to feel instant, light on battery
-    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _check());
+    // Poll every 8 s; short enough to feel instant, easy on battery
+    _pollTimer =
+        Timer.periodic(const Duration(seconds: 8), (_) => _check());
   }
 
   Future<void> recheck() => _check();
@@ -41,12 +73,12 @@ class ConnectivityService extends ChangeNotifier {
     if (_inCheck) return;
     _inCheck = true;
     try {
-      // ── Step 1: radio-level check (fast, no data needed) ──────────────────
-      final results = await Connectivity().checkConnectivity();
-      final hasRadio = results.any((r) =>
-          r == ConnectivityResult.wifi ||
-          r == ConnectivityResult.mobile ||
-          r == ConnectivityResult.ethernet ||
+      // ── Step 1: radio check (no I/O, instant) ────────────────────────────
+      final radios = await Connectivity().checkConnectivity();
+      final hasRadio = radios.any((r) =>
+          r == ConnectivityResult.wifi    ||
+          r == ConnectivityResult.mobile  ||
+          r == ConnectivityResult.ethernet||
           r == ConnectivityResult.vpn);
 
       if (!hasRadio) {
@@ -54,20 +86,32 @@ class ConnectivityService extends ChangeNotifier {
         return;
       }
 
-      // ── Step 2: real data probe — TCP connect to known IPs ────────────────
-      // Using raw TCP to well-known addresses confirms data actually flows
-      // without relying on DNS (which can be spoofed or ad-blocked).
-      //   8.8.8.8:53  → Google Public DNS (TCP)
-      //   1.1.1.1:443 → Cloudflare HTTPS port
-      //   142.250.80.46:80 → Google HTTP (hardcoded IP, no DNS needed)
-      final probeResults = await Future.wait([
-        _tcpProbe('8.8.8.8', 53),
-        _tcpProbe('1.1.1.1', 443),
-        _httpProbe(), // Android-native connectivity check endpoint
-      ]);
+      // ── Step 2: parallel HTTP probes with latency measurement ────────────
+      final results = await Future.wait(
+        _probeTargets.map(_probe),
+        eagerError: false,
+      );
 
-      final hasData = probeResults.any((ok) => ok);
-      _set(hasData ? NetworkState.connected : NetworkState.noData);
+      final successes = results.where((r) => r.success).toList();
+
+      // Zero successes across all seven endpoints = no data
+      if (successes.isEmpty) {
+        _set(NetworkState.noData);
+        return;
+      }
+
+      // Success rate check — too many drops = weak / unstable
+      final successRate = successes.length / results.length;
+
+      // Median latency of successful probes
+      final latencies = successes.map((r) => r.latencyMs).toList()..sort();
+      final medianMs  = latencies[latencies.length ~/ 2];
+
+      if (successRate < _weakSuccessRate || medianMs > _weakLatencyMs) {
+        _set(NetworkState.weak);
+      } else {
+        _set(NetworkState.connected);
+      }
     } catch (_) {
       _set(NetworkState.noInternet);
     } finally {
@@ -75,44 +119,48 @@ class ConnectivityService extends ChangeNotifier {
     }
   }
 
-  /// TCP socket connect — verifies actual Layer-4 connectivity.
-  /// Returns true if a socket can be established within the timeout.
-  Future<bool> _tcpProbe(String host, int port) async {
-    Socket? socket;
-    try {
-      socket = await Socket.connect(
-        host,
-        port,
-        timeout: const Duration(seconds: 4),
-      );
-      return true;
-    } catch (_) {
-      return false;
-    } finally {
-      try { socket?.destroy(); } catch (_) {}
-    }
-  }
-
-  /// HTTP probe against Android's built-in connectivity check URL.
-  /// Returns 204 No Content on a live connection; redirect/error on captive
-  /// portal or no data. This is exactly what Android uses internally.
-  Future<bool> _httpProbe() async {
-    HttpClient? client;
+  Future<_ProbeResult> _probe(String url) async {
+    final sw     = Stopwatch()..start();
+    HttpClient?  client;
     try {
       client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 4)
-        ..idleTimeout       = const Duration(seconds: 4);
-      final req = await client
-          .getUrl(Uri.parse(
-              'http://connectivitycheck.gstatic.com/generate_204'))
-          .timeout(const Duration(seconds: 4));
-      req.headers.set(HttpHeaders.connectionHeader, 'close');
-      final res = await req.close().timeout(const Duration(seconds: 4));
-      await res.drain<void>();
-      // 204 = fully connected, 200 = captive portal page = treat as no data
-      return res.statusCode == 204;
+        ..connectionTimeout      = Duration(milliseconds: _probeTimeoutMs)
+        ..idleTimeout            = Duration(milliseconds: _probeTimeoutMs)
+        ..badCertificateCallback = (_, __, ___) => true;
+
+      final request = await client
+          .getUrl(Uri.parse(url))
+          .timeout(Duration(milliseconds: _probeTimeoutMs));
+      request.headers
+        ..set(HttpHeaders.connectionHeader, 'close')
+        ..set(HttpHeaders.userAgentHeader,
+            'Mozilla/5.0 (Linux; Android 12) Mobile');
+
+      final response = await request
+          .close()
+          .timeout(Duration(milliseconds: _probeTimeoutMs));
+      await response.drain<void>();
+      sw.stop();
+
+      // 204 / 200 / 301 / 302 all count as "reached the server"
+      // 5xx might mean server error but traffic IS flowing
+      final ok = response.statusCode < 600;
+      return _ProbeResult(success: ok, latencyMs: sw.elapsedMilliseconds);
+    } on SocketException {
+      sw.stop();
+      return _ProbeResult(success: false, latencyMs: sw.elapsedMilliseconds);
+    } on HttpException {
+      sw.stop();
+      return _ProbeResult(success: false, latencyMs: sw.elapsedMilliseconds);
+    } on TlsException {
+      sw.stop();
+      return _ProbeResult(success: false, latencyMs: sw.elapsedMilliseconds);
+    } on TimeoutException {
+      sw.stop();
+      return _ProbeResult(success: false, latencyMs: _probeTimeoutMs);
     } catch (_) {
-      return false;
+      sw.stop();
+      return _ProbeResult(success: false, latencyMs: sw.elapsedMilliseconds);
     } finally {
       try { client?.close(force: true); } catch (_) {}
     }
