@@ -1,50 +1,36 @@
-# Flutter/Dart
+# ── Signing — NEVER commit these ─────────────────────────────────────────────
+android/key.properties
+android/*.jks
+android/*.keystore
+*.jks
+*.keystore
+
+# ── Flutter / Dart ────────────────────────────────────────────────────────────
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
-.pub-cache/
-.pub/
 build/
-*.iml
+pubspec.lock
 
-# Android
-android/.gradle
-android/captures/
-android/gradlew
-android/gradlew.bat
+# ── Android ───────────────────────────────────────────────────────────────────
+android/.gradle/
 android/local.properties
-android/key.properties
-android/app/keystore.jks
-android/app/*.jks
-android/app/google-services.json
-*.apk
-*.aab
+android/captures/
+android/app/debug/
+android/app/profile/
+android/app/release/
+**/GeneratedPluginRegistrant.java
 
-# iOS
-ios/Flutter/App.framework
+# ── iOS ───────────────────────────────────────────────────────────────────────
 ios/Flutter/Flutter.framework
 ios/Flutter/Flutter.podspec
-ios/Flutter/Generated.xcconfig
-ios/Flutter/ephemeral/
-ios/Pods/
 ios/.symlinks/
-ios/Runner/GeneratedPluginRegistrant.*
-*.ipa
-*.mobileprovision
+ios/Pods/
+ios/Runner.xcworkspace/xcuserdata/
 
-# Secrets
-*.p12
-*.pem
-key.properties
-google-services.json
-GoogleService-Info.plist
-
-# IDE
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .idea/
 .vscode/
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-.DS_Store
-Thumbs.db
+*.iml
+*.ipr
+*.iws
