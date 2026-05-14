@@ -5,13 +5,11 @@ import '../../services/ad_block_service.dart';
 import '../../services/iap_service.dart';
 import 'remove_ads_sheet.dart';
 
-/// Drop this into the MaterialApp builder stack.
-/// Renders a full-screen blocking overlay when an ad blocker is detected
-/// AND the user has not purchased a Remove Ads plan.
-/// Premium users (adsRemoved == true) bypass this entirely.
+/// Full-screen blocking overlay shown when an ad blocker is detected.
+/// Premium users (adsRemoved == true) are completely exempt.
+/// Sits in MaterialApp.builder stack above all routes.
 class AdBlockerGate extends StatefulWidget {
   const AdBlockerGate({super.key});
-
   @override
   State<AdBlockerGate> createState() => _AdBlockerGateState();
 }
@@ -20,6 +18,7 @@ class _AdBlockerGateState extends State<AdBlockerGate>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulse;
   bool _checking = false;
+  bool _justChecked = false; // shows brief "Checking…" → "Still blocked" feedback
 
   @override
   void initState() {
@@ -38,63 +37,75 @@ class _AdBlockerGateState extends State<AdBlockerGate>
 
   Future<void> _retry() async {
     if (_checking) return;
-    setState(() => _checking = true);
+    setState(() {
+      _checking    = true;
+      _justChecked = false;
+    });
     await AdBlockService().recheck();
-    if (mounted) setState(() => _checking = false);
+    if (mounted) {
+      setState(() {
+        _checking    = false;
+        _justChecked = true;
+      });
+      // Clear "still blocked" message after 2.5 s
+      Future.delayed(const Duration(milliseconds: 2500), () {
+        if (mounted) setState(() => _justChecked = false);
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final adBlock = context.watch<AdBlockService>();
-    final iap = context.watch<IapService>();
+    final iap     = context.watch<IapService>();
 
-    // Premium users are completely exempt from this overlay
+    // Premium — completely bypass
     if (!adBlock.adBlocked || iap.adsRemoved) return const SizedBox.shrink();
 
     return Positioned.fill(
       child: Material(
-        color: Colors.transparent,
-        child: AbsorbPointer(
-          absorbing: true,
-          child: GestureDetector(
-            // Swallow all gestures so nothing beneath is tappable
-            onTap: () {},
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    const Color(0xFF0A0E23).withOpacity(0.98),
-                    const Color(0xFF120A20).withOpacity(0.99),
-                  ],
-                ),
+        type: MaterialType.transparency,
+        child: GestureDetector(
+          onTap: () {},
+          onPanUpdate: (_) {},
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end:   Alignment.bottomCenter,
+                colors: [
+                  const Color(0xFF060A1A).withOpacity(0.97),
+                  const Color(0xFF120A20).withOpacity(0.99),
+                ],
               ),
+            ),
+            child: AbsorbPointer(
+              // Absorb everything EXCEPT the two action buttons below
+              absorbing: false,
               child: SafeArea(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Animated shield icon
+                    // ── Animated shield ──────────────────────────────────
                     AnimatedBuilder(
                       animation: _pulse,
                       builder: (_, __) => Transform.scale(
                         scale: 0.93 + 0.07 * _pulse.value,
                         child: Container(
-                          width: 104,
-                          height: 104,
+                          width: 108, height: 108,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: AppColors.neonOrange.withOpacity(0.10),
                             border: Border.all(
-                              color: AppColors.neonOrange
-                                  .withOpacity(0.35 + 0.45 * _pulse.value),
+                              color: AppColors.neonOrange.withOpacity(
+                                  0.35 + 0.45 * _pulse.value),
                               width: 2,
                             ),
                             boxShadow: [
                               BoxShadow(
                                 color: AppColors.neonOrange
                                     .withOpacity(0.22 * _pulse.value),
-                                blurRadius: 32,
+                                blurRadius: 36,
                                 spreadRadius: 4,
                               ),
                             ],
@@ -102,14 +113,14 @@ class _AdBlockerGateState extends State<AdBlockerGate>
                           child: const Icon(
                             Icons.shield_outlined,
                             color: AppColors.neonOrange,
-                            size: 50,
+                            size: 52,
                           ),
                         ),
                       ),
                     ),
                     const SizedBox(height: 32),
 
-                    // Title
+                    // ── Title ────────────────────────────────────────────
                     const Text(
                       'Ad Blocker Detected',
                       textAlign: TextAlign.center,
@@ -118,11 +129,12 @@ class _AdBlockerGateState extends State<AdBlockerGate>
                         fontWeight: FontWeight.w800,
                         fontFamily: 'Poppins',
                         color: AppColors.white,
+                        letterSpacing: -0.3,
                       ),
                     ),
                     const SizedBox(height: 14),
 
-                    // Body
+                    // ── Body ─────────────────────────────────────────────
                     const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 36),
                       child: Text(
@@ -138,15 +150,30 @@ class _AdBlockerGateState extends State<AdBlockerGate>
                         ),
                       ),
                     ),
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 12),
 
-                    // ── Enable Ads ──
+                    // ── Feedback line (still blocked / checking) ─────────
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 300),
+                      child: _checking
+                          ? _statusPill('Checking…', AppColors.neonBlue,
+                              Icons.sync_rounded, spinning: true)
+                          : _justChecked
+                              ? _statusPill('Still blocked', AppColors.neonRed,
+                                  Icons.close_rounded)
+                              : const SizedBox(height: 20),
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    // ── "I've Enabled Ads" button ─────────────────────────
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 28),
-                      child: AbsorbPointer(
-                        absorbing: false,
-                        child: GestureDetector(
-                          onTap: _checking ? null : _retry,
+                      child: GestureDetector(
+                        onTap: _checking ? null : _retry,
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 200),
+                          opacity: _checking ? 0.6 : 1.0,
                           child: Container(
                             width: double.infinity,
                             padding: const EdgeInsets.symmetric(vertical: 15),
@@ -168,16 +195,15 @@ class _AdBlockerGateState extends State<AdBlockerGate>
                             child: _checking
                                 ? const Center(
                                     child: SizedBox(
-                                      width: 22,
-                                      height: 22,
+                                      width: 22, height: 22,
                                       child: CircularProgressIndicator(
-                                        color: Colors.black87,
-                                        strokeWidth: 2.5,
-                                      ),
+                                          color: Colors.black87,
+                                          strokeWidth: 2.5),
                                     ),
                                   )
                                 : const Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.center,
                                     children: [
                                       Icon(Icons.check_circle_outline_rounded,
                                           color: Colors.black87, size: 20),
@@ -199,47 +225,43 @@ class _AdBlockerGateState extends State<AdBlockerGate>
                     ),
                     const SizedBox(height: 14),
 
-                    // ── Go Ad-Free (IAP) ──
+                    // ── "Go Ad-Free" IAP button ───────────────────────────
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 28),
-                      child: AbsorbPointer(
-                        absorbing: false,
-                        child: GestureDetector(
-                          onTap: () => RemoveAdsSheet.show(context),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(16),
-                              color: AppColors.white10,
-                              border: Border.all(
-                                  color: AppColors.neonPurple.withOpacity(0.45),
-                                  width: 1.5),
-                            ),
-                            child: const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.workspace_premium_rounded,
-                                    color: AppColors.neonPurple, size: 20),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Go Ad-Free — from \$0.99',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                    fontFamily: 'Poppins',
-                                    color: AppColors.neonPurple,
-                                  ),
+                      child: GestureDetector(
+                        onTap: () => RemoveAdsSheet.show(context),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            color: AppColors.white10,
+                            border: Border.all(
+                                color: AppColors.neonPurple.withOpacity(0.45),
+                                width: 1.5),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.workspace_premium_rounded,
+                                  color: AppColors.neonPurple, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Go Ad-Free — from \$0.99',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  fontFamily: 'Poppins',
+                                  color: AppColors.neonPurple,
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
                     const SizedBox(height: 28),
 
-                    // Fine-print
                     const Text(
                       'Flowly cannot run with ads blocked.',
                       style: TextStyle(
@@ -255,6 +277,34 @@ class _AdBlockerGateState extends State<AdBlockerGate>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _statusPill(String text, Color color, IconData icon,
+      {bool spinning = false}) {
+    return Container(
+      key: ValueKey(text),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(30),
+        color: color.withOpacity(0.10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        spinning
+            ? SizedBox(
+                width: 14, height: 14,
+                child: CircularProgressIndicator(
+                    color: color, strokeWidth: 2))
+            : Icon(icon, color: color, size: 14),
+        const SizedBox(width: 8),
+        Text(text,
+            style: TextStyle(
+                fontSize: 12,
+                fontFamily: 'Poppins',
+                color: color,
+                fontWeight: FontWeight.w600)),
+      ]),
     );
   }
 }
