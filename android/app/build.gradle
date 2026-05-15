@@ -15,7 +15,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace "com.chastechgroup.flowly"
-    compileSdk 34
+    compileSdk 35
     ndkVersion "21.4.7075529"
 
     compileOptions {
@@ -34,7 +34,7 @@ android {
     defaultConfig {
         applicationId   "com.chastechgroup.flowly"
         minSdk          21
-        targetSdk       34
+        targetSdk       35
         versionCode     1
         versionName     "1.0.0"
         multiDexEnabled true
