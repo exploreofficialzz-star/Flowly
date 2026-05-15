@@ -48,9 +48,9 @@ jobs:
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS:       ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:    ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD:  ${{ secrets.STORE_PASSWORD }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > android/app/keystore.jks
           cat > android/key.properties << EOF
@@ -69,16 +69,36 @@ jobs:
         run: flutter build apk --release --split-per-abi
 
       - name: Build AAB (release)
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         run: flutter build appbundle --release
 
-      - name: Upload APK artifacts
+      - name: Verify AAB exists
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        run: |
+          AAB=build/app/outputs/bundle/release/app-release.aab
+          if [ ! -f "$AAB" ]; then
+            echo "❌  AAB not found at $AAB"
+            exit 1
+          fi
+          SIZE=$(du -sh "$AAB" | cut -f1)
+          echo "✅  AAB produced — $AAB ($SIZE)"
+
+      - name: Upload APK artefacts (debug)
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: flowly-apk-${{ github.sha }}
+          name: flowly-apk-debug-${{ github.sha }}
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 14
+
+      - name: Upload APK + AAB artefacts (release)
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowly-release-${{ github.sha }}
           path: |
-            build/app/outputs/flutter-apk/*.apk
-            build/app/outputs/bundle/release/*.aab
+            build/app/outputs/flutter-apk/*-release.apk
+            build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
   build-ios:
@@ -113,7 +133,7 @@ jobs:
           cp -r build/ios/iphoneos/Runner.app Payload/
           zip -r flowly.ipa Payload
 
-      - name: Upload iOS artifact
+      - name: Upload iOS artefact
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
@@ -127,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download all artifacts
+      - name: Download all artefacts
         uses: actions/download-artifact@v4
 
       - name: Create Release
@@ -137,12 +157,18 @@ jobs:
           body: |
             ## Flowly ${{ github.ref_name }}
             **by chAs Tech Group** — `com.chastechgroup.flowly`
-            - Android APK (arm64, armeabi-v7a, x86_64)
-            - Android AAB (Play Store)
-            - iOS IPA
+
+            ### 📦 Included builds
+            | File | Use |
+            |------|-----|
+            | `app-arm64-v8a-release.apk` | Modern Android devices |
+            | `app-armeabi-v7a-release.apk` | Older Android devices |
+            | `app-x86_64-release.apk` | Emulators / x86 devices |
+            | `app-release.aab` | ✅ **Upload this to Google Play** |
+            | `flowly.ipa` | iOS (requires code-signing) |
           files: |
-            flowly-apk-*/flutter-apk/*.apk
-            flowly-apk-*/bundle/release/*.aab
+            flowly-release-*/flutter-apk/*-release.apk
+            flowly-release-*/bundle/release/app-release.aab
             flowly-ipa-*/flowly.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
