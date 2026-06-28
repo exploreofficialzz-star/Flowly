@@ -11,6 +11,8 @@ import '../../widgets/neon_button.dart';
 import '../../widgets/remove_ads_sheet.dart';
 import '../worlds/worlds_screen.dart';
 import '../game/game_screen.dart';
+import '../competition/competition_screen.dart';
+import '../../../services/competition_service.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -198,6 +200,10 @@ class HomeScreen extends StatelessWidget {
                     ).animate().fadeIn(delay: 450.ms),
                     const SizedBox(height: 16),
 
+                    // Future Hope Competition Card
+                    _CompetitionCard().animate().fadeIn(delay: 500.ms),
+                    const SizedBox(height: 16),
+
                     _DailyChallengeCard().animate().fadeIn(delay: 550.ms),
                     const SizedBox(height: 40),
 
@@ -249,6 +255,82 @@ class _StatCard extends StatelessWidget {
                 fontSize: 12,
                 fontFamily: 'Poppins',
                 color: AppColors.white40)),
+      ]),
+    );
+  }
+}
+
+class _CompetitionCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final svc = context.watch<CompetitionService>();
+    final hasScore    = svc.isRegistered && svc.userScore > 0;
+    final userPos     = svc.userPosition;
+    final ptsTop10    = svc.ptsToTop10;
+
+    return GlassCard(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const CompetitionScreen()),
+      ),
+      padding: const EdgeInsets.all(20),
+      gradient: const LinearGradient(
+        colors: [Color(0x1800C8FF), Color(0x10B400FF)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFFD700), Color(0xFFFF8C00)],
+            ),
+            boxShadow: [BoxShadow(
+                color: const Color(0xFFFFD700).withOpacity(0.3),
+                blurRadius: 10)],
+          ),
+          child: const Text('🏆', style: TextStyle(fontSize: 18)),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Future Hope Competition',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'Poppins',
+                      color: AppColors.white)),
+              if (hasScore) ...[
+                Text(
+                  userPos > 0
+                      ? 'You\'re Rank #$userPos · ${svc.userScore} pts'
+                      : '${svc.userScore} pts earned today',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'Poppins',
+                      color: AppColors.neonBlue),
+                ),
+                if (ptsTop10 > 0 && userPos > 10)
+                  Text('$ptsTop10 pts to Top 10  🔥',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'Poppins',
+                          color: AppColors.white40)),
+              ] else ...[
+                const Text('Prize pool: \$50 · \$40 · \$30 · more...',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'Poppins',
+                        color: AppColors.white40)),
+              ],
+            ],
+          ),
+        ),
+        const Icon(Icons.chevron_right_rounded, color: AppColors.white40),
       ]),
     );
   }

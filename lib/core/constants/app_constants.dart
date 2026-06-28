@@ -63,6 +63,12 @@ class AppConstants {
     {'name': 'Cosmic Void', 'emoji': '🌌', 'primaryColor': 0xFF7B61FF, 'bgColor': 0xFF08051A},
   ];
 
+  // ── Competition ─────────────────────────────────────────────────────────────
+  static const supportEmail      = 'chastechnologiesllc@gmail.com';
+  static const competitionName   = 'Future Hope Competition';
+  /// Flip to true once prize payouts are active
+  static const prizesActive      = false;
+
   // ── SharedPreferences keys ──────────────────────────────────────────────────
   static const keyTotalLevelsCompleted = 'total_levels_completed';
   static const keyCurrentWorld         = 'current_world';

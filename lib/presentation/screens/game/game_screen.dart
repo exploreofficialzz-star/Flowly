@@ -8,6 +8,7 @@ import '../../../core/constants/app_constants.dart';
 import '../../../data/models/game_model.dart';
 import '../../../services/ad_service.dart';
 import '../../../services/iap_service.dart';
+import '../../../services/competition_service.dart';
 import '../../providers/game_provider.dart';
 import '../../widgets/glass_card.dart';
 import '../../widgets/remove_ads_sheet.dart';
@@ -1262,17 +1263,30 @@ class _WinOverlay extends StatefulWidget {
 }
 
 class _WinOverlayState extends State<_WinOverlay> {
-  bool _adShown = false;
+  bool _adShown       = false;
+  int  _competitionPts = 0;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Show interstitial ad (non-premium only)
       final iap = IapService();
       if (!_adShown && !iap.adsRemoved) {
         _adShown = true;
         AdService().showInterstitial(onDismissed: () {});
       }
+
+      // Submit competition score
+      final game = context.read<GameProvider>();
+      final pts = await CompetitionService().submitLevelScore(
+        colorCount:  game.currentColorCount,
+        movesUsed:   game.moves,
+        maxMoves:    game.maxMoves,
+        secondsUsed: game.elapsedSeconds,
+        streakDays:  game.dailyStreak,
+      );
+      if (mounted && pts > 0) setState(() => _competitionPts = pts);
     });
   }
 
@@ -1322,6 +1336,27 @@ class _WinOverlayState extends State<_WinOverlay> {
                     fontSize: 13,
                     fontFamily: 'Poppins',
                     color: AppColors.white40)),
+            // Competition pts earned badge
+            if (_competitionPts > 0) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF00C8FF), Color(0xFFB400FF)],
+                  ),
+                ),
+                child: Text(
+                  '🏆 +$_competitionPts competition pts',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'Poppins',
+                      color: Colors.white),
+                ),
+              ).animate().fadeIn(delay: 300.ms).slideY(begin: -0.3),
+            ],
             const SizedBox(height: 20),
             // Remove Ads upsell
             const RemoveAdsBanner(),

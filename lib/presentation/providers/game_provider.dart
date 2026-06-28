@@ -82,6 +82,16 @@ class GameProvider extends ChangeNotifier {
   bool _isPouring = false;
   bool get isPouring => _isPouring;
 
+  // ── Competition timing & color count ──────────────────────────────────────
+  DateTime? _levelStartTime;
+  /// Seconds elapsed since current level started (used for competition scoring)
+  int get elapsedSeconds => _levelStartTime != null
+      ? DateTime.now().difference(_levelStartTime!).inSeconds
+      : 120;
+  /// Number of distinct colors in the current level
+  int get currentColorCount =>
+      _allLevels[_currentLevelId.clamp(0, _allLevels.length - 1)].colorCount;
+
   // ── Init ────────────────────────────────────────────────────────────────────
   Future<void> init() async {
     try {
@@ -124,6 +134,7 @@ class GameProvider extends ChangeNotifier {
     _currentPour    = null;
     _isPouring      = false;
     _undoStack.clear();
+    _levelStartTime = DateTime.now(); // competition timer starts here
     notifyListeners();
     _audio.playLevelStart().catchError((_) {});
   }

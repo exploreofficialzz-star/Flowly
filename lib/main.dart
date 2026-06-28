@@ -11,6 +11,7 @@ import 'services/ad_service.dart';
 import 'services/audio_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/iap_service.dart';
+import 'services/competition_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +27,7 @@ void main() async {
   await AdService().init();
   // IAP: restore any active Remove-Ads subscription from SharedPreferences.
   await IapService().init();
+  await CompetitionService().init();
   // Connectivity: begins radio + DNS probing immediately (fire-and-forget).
   await ConnectivityService().init();
   // Ad-block detection: DNS-probe ad-serving domains (fire-and-forget).
@@ -81,6 +83,7 @@ class _FlowlyAppState extends State<FlowlyApp> with WidgetsBindingObserver {
         // All three singletons exposed as ChangeNotifiers so every widget
         // that calls context.watch<T>() gets rebuilds automatically.
         ChangeNotifierProvider.value(value: IapService()),
+        ChangeNotifierProvider.value(value: CompetitionService()),
         ChangeNotifierProvider.value(value: ConnectivityService()),
         ChangeNotifierProvider.value(value: AdBlockService()),
       ],
