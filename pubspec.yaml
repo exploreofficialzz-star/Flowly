@@ -23,6 +23,7 @@ dependencies:
   url_launcher: ^6.2.1
   connectivity_plus: ^6.0.3
   in_app_purchase: ^3.1.13
+  flutter_paystack: ^1.0.5
 
 dev_dependencies:
   flutter_test:

@@ -9,409 +9,286 @@ import 'registration_screen.dart';
 
 class CompetitionScreen extends StatefulWidget {
   const CompetitionScreen({super.key});
-
   @override
   State<CompetitionScreen> createState() => _CompetitionScreenState();
 }
 
 class _CompetitionScreenState extends State<CompetitionScreen> {
-  Timer?  _clockTimer;
-  String  _countdown = '00:00:00';
-  // Track previous positions for change arrows
-  final Map<String, int> _prevPositions = {};
-  final Map<String, bool> _movedUp      = {};
-  Timer? _arrowClearTimer;
+  Timer? _clockTimer;
+  String _countdown = '00:00:00';
+  final Map<String, int>  _prevPositions = {};
+  final Map<String, bool> _movedUp       = {};
+  Timer? _arrowFade;
 
   @override
   void initState() {
     super.initState();
-    _updateCountdown();
+    _tick();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _updateCountdown());
+      if (mounted) setState(_tick);
     });
   }
 
-  void _updateCountdown() {
-    _countdown = CompetitionService().resetCountdown;
-  }
+  void _tick() => _countdown = CompetitionService().resetCountdown;
 
-  void _snapshotPositions(List<LeaderboardEntry> board) {
-    final newPositions = {for (var e in board) e.id: e.position};
-    // Detect changes
-    for (final e in board) {
-      final prev = _prevPositions[e.id];
-      if (prev != null && prev != e.position) {
-        _movedUp[e.id] = e.position < prev; // lower number = higher rank
+  void _snapshot(List<LeaderboardEntry> board) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final e in board) {
+        final prev = _prevPositions[e.id];
+        if (prev != null && prev != e.position) {
+          _movedUp[e.id] = e.position < prev;
+        }
       }
-    }
-    _prevPositions.clear();
-    _prevPositions.addAll(newPositions);
+      _prevPositions
+        ..clear()
+        ..addAll({for (var e in board) e.id: e.position});
 
-    // Clear arrows after 8s
-    _arrowClearTimer?.cancel();
-    _arrowClearTimer = Timer(const Duration(seconds: 8), () {
-      if (mounted) setState(() => _movedUp.clear());
+      _arrowFade?.cancel();
+      _arrowFade = Timer(const Duration(seconds: 9), () {
+        if (mounted) setState(() => _movedUp.clear());
+      });
     });
   }
 
   @override
   void dispose() {
     _clockTimer?.cancel();
-    _arrowClearTimer?.cancel();
+    _arrowFade?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final svc = context.watch<CompetitionService>();
+    _snapshot(svc.leaderboard);
 
-    // Register position snapshots on every rebuild
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _snapshotPositions(svc.leaderboard);
-    });
-
-    // Gate: must register first
     if (!svc.isRegistered) {
-      return RegistrationScreen(
-        onRegistered: () {
-          if (mounted) setState(() {});
-        },
-      );
+      return RegistrationScreen(onRegistered: () => setState(() {}));
     }
 
-    final board      = svc.leaderboard;
-    final events     = svc.liveEvents;
-    final userPos    = svc.userPosition;
-    final userScore  = svc.userScore;
-    final ptsTop10   = svc.ptsToTop10;
-    final ptsNext    = svc.ptsToNextPosition;
-    final aboveEntry = svc.entryAboveUser;
+    final board  = svc.leaderboard;
+    final events = svc.liveEvents;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: Container(
         decoration: const BoxDecoration(gradient: AppColors.gradientBg),
         child: SafeArea(
-          child: Column(
-            children: [
-              // ── Header ───────────────────────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                child: Row(children: [
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: const Icon(Icons.arrow_back_ios_new_rounded,
-                        color: AppColors.white40, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('🏆 Future Hope Competition',
-                            style: TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                                fontFamily: 'Poppins',
-                                color: AppColors.white)),
-                        Text('Resets daily at midnight',
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontFamily: 'Poppins',
-                                color: AppColors.white40)),
-                      ],
-                    ),
-                  ),
-                  // Countdown
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(10),
-                      color: AppColors.bgCard,
-                      border: Border.all(color: AppColors.white10),
-                    ),
-                    child: Row(children: [
-                      const Icon(Icons.timer_outlined,
-                          color: AppColors.neonBlue, size: 13),
-                      const SizedBox(width: 4),
-                      Text(_countdown,
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              fontFamily: 'Poppins',
-                              color: AppColors.neonBlue)),
-                    ]),
-                  ),
-                ]),
+          child: Column(children: [
+            // ── Header ──────────────────────────────────────────────────────
+            _Header(countdown: _countdown),
+            const SizedBox(height: 6),
+
+            // ── Top-10 prize hint ────────────────────────────────────────────
+            _PrizeHint(),
+            const SizedBox(height: 4),
+
+            // ── Leaderboard list ─────────────────────────────────────────────
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+                itemCount: board.length,
+                itemBuilder: (ctx, i) {
+                  final e      = board[i];
+                  final isUser = !e.isBot;
+                  final moved  = _movedUp[e.id];
+                  return _Row(
+                    entry:   e,
+                    isUser:  isUser,
+                    movedUp: moved,
+                    prize:   _prize(e.position),
+                  ).animate(delay: Duration(milliseconds: 15 * i.clamp(0, 20)))
+                   .fadeIn(duration: 250.ms);
+                },
               ),
-              const SizedBox(height: 12),
+            ),
 
-              // ── Prize strip ──────────────────────────────────────────────────
-              _PrizeStrip(),
-              const SizedBox(height: 8),
+            // ── Pinned user card ─────────────────────────────────────────────
+            _YourCard(svc: svc),
 
-              // ── Leaderboard ──────────────────────────────────────────────────
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: board.length,
-                  itemBuilder: (context, i) {
-                    final entry   = board[i];
-                    final isUser  = !entry.isBot;
-                    final moved   = _movedUp[entry.id];
-
-                    return _LeaderboardRow(
-                      entry:   entry,
-                      isUser:  isUser,
-                      movedUp: moved,
-                      prize:   _prizeFor(entry.position),
-                    ).animate(delay: Duration(milliseconds: 20 * i))
-                     .fadeIn(duration: 300.ms);
-                  },
-                ),
-              ),
-
-              // ── Your position card (fixed at bottom) ─────────────────────────
-              if (svc.isRegistered) ...[
-                _UserPositionCard(
-                  userName:  svc.userName ?? '',
-                  userFlag:  svc.userFlag ?? '🌍',
-                  userScore: userScore,
-                  userPos:   userPos,
-                  ptsTop10:  ptsTop10,
-                  ptsNext:   ptsNext,
-                  aboveEntry: aboveEntry,
-                ),
-              ],
-
-              // ── Live feed ─────────────────────────────────────────────────────
-              if (events.isNotEmpty) _LiveFeedPanel(events: events),
-
-              const SizedBox(height: 8),
-            ],
-          ),
+            // ── Live feed ─────────────────────────────────────────────────────
+            if (events.isNotEmpty) _Feed(events: events),
+            const SizedBox(height: 6),
+          ]),
         ),
       ),
     );
   }
 
-  String? _prizeFor(int position) {
-    if (position == 1) return '\$50';
-    if (position == 2) return '\$40';
-    if (position == 3) return '\$30';
-    if (position == 4) return '\$20';
-    if (position == 5) return '\$10';
-    if (position <= 10) return '\$5';
+  String? _prize(int pos) {
+    const m = {1: '\$50', 2: '\$40', 3: '\$30', 4: '\$20', 5: '\$10'};
+    if (m.containsKey(pos)) return m[pos];
+    if (pos <= 10) return '\$5';
     return null;
   }
 }
 
-// ── Prize strip ───────────────────────────────────────────────────────────────
-class _PrizeStrip extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 46,
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        gradient: const LinearGradient(
-          colors: [Color(0x33FFD700), Color(0x11FF8C00)],
-        ),
-        border: Border.all(color: const Color(0x33FFD700)),
-      ),
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        children: [
-          const _PrizeChip(label: '💰 Daily Prizes', isTitle: true),
-          const _PrizeChip(label: '🥇 \$50'),
-          const _PrizeChip(label: '🥈 \$40'),
-          const _PrizeChip(label: '🥉 \$30'),
-          const _PrizeChip(label: '4th \$20'),
-          const _PrizeChip(label: '5th \$10'),
-          const _PrizeChip(label: '6-10th \$5 each'),
-          const SizedBox(width: 8),
-          Center(
-            child: Text('📧 chastechnologiesllc@gmail.com',
-                style: const TextStyle(
-                    fontSize: 10,
-                    fontFamily: 'Poppins',
-                    color: AppColors.white40)),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-    );
-  }
-}
-
-class _PrizeChip extends StatelessWidget {
-  final String label;
-  final bool   isTitle;
-  const _PrizeChip({required this.label, this.isTitle = false});
+// ── Header ────────────────────────────────────────────────────────────────────
+class _Header extends StatelessWidget {
+  final String countdown;
+  const _Header({required this.countdown});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Center(
-        child: Text(label,
-            style: TextStyle(
-                fontSize: isTitle ? 12 : 11,
-                fontWeight: isTitle ? FontWeight.w700 : FontWeight.w600,
-                fontFamily: 'Poppins',
-                color: isTitle
-                    ? const Color(0xFFFFD700)
-                    : const Color(0xCCFFD700))),
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+      child: Row(children: [
+        GestureDetector(
+          onTap: () => Navigator.pop(context),
+          child: const Icon(Icons.arrow_back_ios_new_rounded,
+              color: AppColors.white40, size: 20),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Daily Rankings',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
+                    fontFamily: 'Poppins', color: AppColors.white)),
+            Text('Top players worldwide today',
+                style: TextStyle(fontSize: 11, fontFamily: 'Poppins',
+                    color: AppColors.white40)),
+          ]),
+        ),
+        // Countdown chip
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: AppColors.bgCard,
+            border: Border.all(color: AppColors.white10),
+          ),
+          child: Row(children: [
+            const Icon(Icons.refresh_rounded, color: AppColors.white40, size: 12),
+            const SizedBox(width: 4),
+            Text(countdown,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    fontFamily: 'Poppins', color: AppColors.white70)),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Prize hint strip ──────────────────────────────────────────────────────────
+class _PrizeHint extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          color: const Color(0x18FFD700),
+          border: Border.all(color: const Color(0x28FFD700)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('🏆  Top 10 earn prizes  ·  ',
+                style: TextStyle(fontSize: 11, fontFamily: 'Poppins',
+                    color: Color(0xCCFFD700))),
+            Text('1st \$50  ·  2nd \$40  ·  3rd \$30  ·  4th \$20  ·  5th \$10  ·  6–10 \$5',
+                style: TextStyle(fontSize: 10, fontFamily: 'Poppins',
+                    fontWeight: FontWeight.w600, color: Color(0xAAFFD700))),
+          ],
+        ),
       ),
     );
   }
 }
 
 // ── Leaderboard row ───────────────────────────────────────────────────────────
-class _LeaderboardRow extends StatelessWidget {
+class _Row extends StatelessWidget {
   final LeaderboardEntry entry;
-  final bool             isUser;
-  final bool?            movedUp;
-  final String?          prize;
-
-  const _LeaderboardRow({
-    required this.entry,
-    required this.isUser,
-    this.movedUp,
-    this.prize,
-  });
+  final bool isUser;
+  final bool? movedUp;
+  final String? prize;
+  const _Row({required this.entry, required this.isUser,
+      this.movedUp, this.prize});
 
   @override
   Widget build(BuildContext context) {
-    final isElite  = entry.isElite;
-    final pos      = entry.position;
+    final isElite = entry.isElite;
+    final pos     = entry.position;
 
-    // Colors
-    Color rowBg   = Colors.transparent;
-    Color border  = Colors.transparent;
+    // Row styling
+    Color rowBg    = Colors.transparent;
+    Color border   = Colors.transparent;
     if (isUser) {
-      rowBg  = AppColors.neonBlue.withOpacity(0.08);
-      border = AppColors.neonBlue.withOpacity(0.5);
-    } else if (isElite) {
-      rowBg  = const Color(0xFFFFD700).withOpacity(0.05);
-      border = const Color(0xFFFFD700).withOpacity(0.18);
+      rowBg  = AppColors.neonBlue.withOpacity(0.07);
+      border = AppColors.neonBlue.withOpacity(0.45);
+    } else if (isElite && pos <= 3) {
+      rowBg  = const Color(0xFFFFD700).withOpacity(0.04);
+      border = const Color(0xFFFFD700).withOpacity(0.14);
     }
 
-    // Position medal / number
-    Widget posWidget;
-    if      (pos == 1) posWidget = const Text('👑', style: TextStyle(fontSize: 18));
-    else if (pos == 2) posWidget = const Text('🥈', style: TextStyle(fontSize: 16));
-    else if (pos == 3) posWidget = const Text('🥉', style: TextStyle(fontSize: 16));
-    else               posWidget = SizedBox(
-                            width: 28,
-                            child: Text('$pos',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    fontSize: isElite ? 14 : 13,
-                                    fontWeight: FontWeight.w700,
-                                    fontFamily: 'Poppins',
-                                    color: isElite
-                                        ? const Color(0xFFFFD700)
-                                        : AppColors.white40)));
+    // Position badge
+    Widget posBadge;
+    if (pos == 1)      posBadge = const Text('👑', style: TextStyle(fontSize: 17));
+    else if (pos == 2) posBadge = const Text('🥈', style: TextStyle(fontSize: 15));
+    else if (pos == 3) posBadge = const Text('🥉', style: TextStyle(fontSize: 15));
+    else posBadge = SizedBox(width: 26,
+        child: Text('$pos', textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                fontFamily: 'Poppins',
+                color: isElite ? const Color(0xFFFFD700) : AppColors.white40)));
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      margin: const EdgeInsets.symmetric(vertical: 1.5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        color: rowBg,
-        border: Border.all(color: border, width: 1),
+        color: rowBg, border: Border.all(color: border),
       ),
       child: Row(children: [
-        // Position
-        SizedBox(width: 32, child: posWidget),
-        const SizedBox(width: 6),
-
-        // Flag
-        Text(entry.flag, style: const TextStyle(fontSize: 15)),
+        SizedBox(width: 30, child: posBadge),
+        const SizedBox(width: 5),
+        Text(entry.flag, style: const TextStyle(fontSize: 14)),
         const SizedBox(width: 8),
-
-        // Name + country
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                if (isUser) ...[
-                  const Text('★ ', style: TextStyle(
-                      fontSize: 12, color: AppColors.neonBlue)),
-                ],
-                Flexible(
-                  child: Text(
-                    isUser ? '${entry.name} (You)' : entry.name,
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: isUser || isElite
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                        fontFamily: 'Poppins',
-                        color: isUser
-                            ? AppColors.neonBlue
-                            : isElite
-                                ? const Color(0xFFFFE066)
-                                : AppColors.white),
-                  ),
-                ),
-              ]),
-              Text(entry.country,
-                  style: const TextStyle(
-                      fontSize: 10,
-                      fontFamily: 'Poppins',
-                      color: AppColors.white40)),
-            ],
+          child: Text(
+            isUser ? '${entry.name}  (You)' : entry.name,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: isUser || isElite ? FontWeight.w700 : FontWeight.w500,
+                fontFamily: 'Poppins',
+                color: isUser ? AppColors.neonBlue
+                    : isElite ? const Color(0xFFFFE580) : AppColors.white),
           ),
         ),
-
         // Score
         Text(_fmt(entry.score),
-            style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                 fontFamily: 'Poppins',
-                color: isUser
-                    ? AppColors.neonBlue
-                    : isElite
-                        ? const Color(0xFFFFD700)
-                        : AppColors.white70)),
-        const SizedBox(width: 6),
-
-        // Prize
-        if (prize != null)
+                color: isUser ? AppColors.neonBlue
+                    : isElite ? const Color(0xFFFFD700) : AppColors.white60)),
+        // Prize badge
+        if (prize != null) ...[
+          const SizedBox(width: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(6),
-              color: const Color(0x22FFD700),
+              borderRadius: BorderRadius.circular(5),
+              color: const Color(0x1AFFD700),
             ),
             child: Text(prize!,
-                style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'Poppins',
-                    color: Color(0xFFFFD700))),
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                    fontFamily: 'Poppins', color: Color(0xFFFFD700))),
           ),
-        const SizedBox(width: 4),
-
+        ],
         // Change arrow
-        if (movedUp != null)
+        if (movedUp != null) ...[
+          const SizedBox(width: 3),
           Icon(
-            movedUp! ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
-            size: 12,
-            color: movedUp!
-                ? AppColors.neonGreen
-                : AppColors.neonRed,
-          ).animate().fadeIn(duration: 300.ms),
-
+            movedUp! ? Icons.north_rounded : Icons.south_rounded,
+            size: 11,
+            color: movedUp! ? AppColors.neonGreen : AppColors.neonRed,
+          ).animate().fadeIn(duration: 200.ms),
+        ],
       ]),
     );
   }
@@ -419,171 +296,108 @@ class _LeaderboardRow extends StatelessWidget {
   String _fmt(int v) {
     if (v >= 1000) {
       final k = v / 1000;
-      return '${k.toStringAsFixed(k == k.floor() ? 0 : 1)}k';
+      return '${k.toStringAsFixed(k.truncate() == k ? 0 : 1)}k';
     }
     return v.toString();
   }
 }
 
-// ── User pinned card ──────────────────────────────────────────────────────────
-class _UserPositionCard extends StatelessWidget {
-  final String  userName, userFlag;
-  final int     userScore, userPos, ptsTop10, ptsNext;
-  final LeaderboardEntry? aboveEntry;
-
-  const _UserPositionCard({
-    required this.userName,
-    required this.userFlag,
-    required this.userScore,
-    required this.userPos,
-    required this.ptsTop10,
-    required this.ptsNext,
-    this.aboveEntry,
-  });
+// ── Pinned user card ──────────────────────────────────────────────────────────
+class _YourCard extends StatelessWidget {
+  final CompetitionService svc;
+  const _YourCard({required this.svc});
 
   @override
   Widget build(BuildContext context) {
-    final String motivation;
-    if (userPos == 0) {
-      motivation = 'Play a level to enter the board!';
-    } else if (userPos <= 10) {
-      motivation = '🏆 You\'re in the prize zone!';
-    } else if (ptsTop10 < 200) {
-      motivation = '🔥 ${ptsTop10}pts to enter Top 10!';
-    } else if (aboveEntry != null) {
-      motivation = '⬆ ${ptsNext}pts to pass ${aboveEntry!.name.split(' ').first}';
-    } else {
-      motivation = 'Keep playing to climb the board!';
-    }
+    final pos      = svc.userPosition;
+    final score    = svc.userScore;
+    final ptsTop10 = svc.ptsToTop10;
+    final above    = svc.entryAboveUser;
+
+    String msg;
+    if (score == 0)         msg = 'Play a level to appear on the board!';
+    else if (pos <= 10)     msg = '🏆 You\'re in the prize zone!';
+    else if (ptsTop10 < 150) msg = '🔥 ${ptsTop10}pts to Top 10!';
+    else if (above != null) msg = '↑ ${svc.ptsToNextPosition}pts to pass ${above.name.split(' ').first}';
+    else                    msg = 'Keep playing to climb!';
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         color: AppColors.bgCard,
-        border: Border.all(color: AppColors.neonBlue.withOpacity(0.4)),
-        boxShadow: [
-          BoxShadow(
-              color: AppColors.neonBlue.withOpacity(0.12),
-              blurRadius: 12,
-              spreadRadius: 1)
-        ],
+        border: Border.all(color: AppColors.neonBlue.withOpacity(0.35)),
+        boxShadow: [BoxShadow(color: AppColors.neonBlue.withOpacity(0.10),
+            blurRadius: 10)],
       ),
       child: Row(children: [
-        Text(userFlag, style: const TextStyle(fontSize: 20)),
+        Text(svc.userFlag ?? '🌍', style: const TextStyle(fontSize: 18)),
         const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                const Text('★ ', style: TextStyle(
-                    fontSize: 12, color: AppColors.neonBlue)),
-                Text(userName,
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        fontFamily: 'Poppins',
-                        color: AppColors.neonBlue)),
-              ]),
-              Text(motivation,
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontFamily: 'Poppins',
-                      color: AppColors.white40)),
-            ],
-          ),
-        ),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(userPos > 0 ? 'Rank #$userPos' : 'Unranked',
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'Poppins',
-                    color: AppColors.white70)),
-            Text('$userScore pts',
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    fontFamily: 'Poppins',
-                    color: AppColors.neonBlue)),
+            Text(svc.userName ?? '',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    fontFamily: 'Poppins', color: AppColors.neonBlue)),
+            Text(msg, style: const TextStyle(fontSize: 11, fontFamily: 'Poppins',
+                color: AppColors.white40)),
           ],
-        ),
+        )),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(pos > 0 ? 'Rank #$pos' : 'Unranked',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                  fontFamily: 'Poppins', color: AppColors.white70)),
+          Text('$score pts',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800,
+                  fontFamily: 'Poppins', color: AppColors.neonBlue)),
+        ]),
       ]),
     );
   }
 }
 
 // ── Live feed ─────────────────────────────────────────────────────────────────
-class _LiveFeedPanel extends StatefulWidget {
+class _Feed extends StatelessWidget {
   final List<LiveEvent> events;
-  const _LiveFeedPanel({required this.events});
-  @override
-  State<_LiveFeedPanel> createState() => _LiveFeedPanelState();
-}
+  const _Feed({required this.events});
 
-class _LiveFeedPanelState extends State<_LiveFeedPanel> {
   @override
   Widget build(BuildContext context) {
-    final shown = widget.events.take(3).toList();
+    final shown = events.take(3).toList();
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      margin: const EdgeInsets.fromLTRB(14, 6, 14, 0),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         color: AppColors.bgCard,
         border: Border.all(color: AppColors.white10),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Container(
-              width: 7, height: 7,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 6, height: 6,
+            decoration: BoxDecoration(shape: BoxShape.circle,
                 color: AppColors.neonRed,
-                boxShadow: [BoxShadow(
-                    color: AppColors.neonRed.withOpacity(0.6),
-                    blurRadius: 6)],
-              ),
-            ).animate(onPlay: (c) => c.repeat())
-             .fadeOut(duration: 800.ms)
-             .then()
-             .fadeIn(duration: 800.ms),
-            const SizedBox(width: 6),
-            const Text('LIVE',
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    fontFamily: 'Poppins',
-                    color: AppColors.neonRed,
-                    letterSpacing: 1.5)),
+                boxShadow: [BoxShadow(color: AppColors.neonRed.withOpacity(0.5),
+                    blurRadius: 5)]),
+          ).animate(onPlay: (c) => c.repeat())
+           .fadeOut(duration: 700.ms).then().fadeIn(duration: 700.ms),
+          const SizedBox(width: 5),
+          const Text('LIVE', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800,
+              fontFamily: 'Poppins', color: AppColors.neonRed, letterSpacing: 1.4)),
+        ]),
+        const SizedBox(height: 5),
+        ...shown.map((e) => Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Row(children: [
+            Text(e.flag, style: const TextStyle(fontSize: 11)),
+            const SizedBox(width: 5),
+            Expanded(child: Text(e.text, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11, fontFamily: 'Poppins',
+                    color: AppColors.white60))),
           ]),
-          const SizedBox(height: 6),
-          ...shown.asMap().entries.map((e) {
-            final event = e.value;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 3),
-              child: Row(children: [
-                Text(event.flag, style: const TextStyle(fontSize: 12)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(event.text,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 11,
-                          fontFamily: 'Poppins',
-                          color: AppColors.white70)),
-                ),
-              ]),
-            );
-          }),
-        ],
-      ),
+        )),
+      ]),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants/app_constants.dart';
+import 'paystack_service.dart';
 
 /// Purchase state exposed to the UI layer.
 enum IapPurchaseState { idle, pending, processing, error }
@@ -27,15 +28,29 @@ class IapService extends ChangeNotifier {
   // ── Private ─────────────────────────────────────────────────────────────────
   bool _available = false;
   bool _adsRemoved = false;
+  bool _isPlayStore = true;        // false = sideloaded → use Paystack
   DateTime? _removeAdsExpiry;
   List<ProductDetails> _products = [];
   IapPurchaseState _purchaseState = IapPurchaseState.idle;
   String? _purchaseError;
   StreamSubscription<List<PurchaseDetails>>? _purchaseSub;
 
+  bool get isPlayStore => _isPlayStore;
+
+  ProductDetails? productById(String id) {
+    try {
+      return _products.firstWhere((p) => p.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── Init ────────────────────────────────────────────────────────────────────
   Future<void> init() async {
     await _loadExpiry();
+
+    // Detect install source before IAP init
+    _isPlayStore = await PaystackService().isPlayStoreInstall();
 
     _available = await InAppPurchase.instance.isAvailable();
     if (!_available) return;
@@ -160,6 +175,41 @@ class IapService extends ChangeNotifier {
   /// We restore from local SharedPreferences (still valid if not expired).
   Future<void> restorePurchases() async {
     await _loadExpiry(); // re-read from disk in case another device wrote it
+    notifyListeners();
+  }
+
+  // ── Paystack grant (called after successful Paystack checkout) ───────────────
+  Future<void> grantPaystackPurchase(String productId) async {
+    switch (productId) {
+      case AppConstants.iapRemoveAds1Day:
+        await _grantDuration(const Duration(days: 1));
+        break;
+      case AppConstants.iapRemoveAds1Week:
+        await _grantDuration(const Duration(days: 7));
+        break;
+      case AppConstants.iapRemoveAds1Month:
+        await _grantDuration(const Duration(days: 30));
+        break;
+      case 'remove_ads_perm':
+        // Permanent: set a 10-year expiry as a practical "forever"
+        await _grantDuration(const Duration(days: 3650));
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<void> _grantDuration(Duration d) async {
+    final base = (_removeAdsExpiry != null && _removeAdsExpiry!.isAfter(DateTime.now()))
+        ? _removeAdsExpiry!
+        : DateTime.now();
+    _removeAdsExpiry = base.add(d);
+    _adsRemoved      = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(AppConstants.keyRemoveAdsExpiry,
+          _removeAdsExpiry!.millisecondsSinceEpoch);
+    } catch (_) {}
     notifyListeners();
   }
 

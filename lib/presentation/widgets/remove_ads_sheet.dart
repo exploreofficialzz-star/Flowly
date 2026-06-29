@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../services/iap_service.dart';
+import '../../services/paystack_service.dart';
 
 // ── Inline banner ──────────────────────────────────────────────────────────────
 class RemoveAdsBanner extends StatelessWidget {
@@ -194,26 +195,34 @@ class _RemoveAdsSheetState extends State<RemoveAdsSheet> {
 
           const SizedBox(height: 8),
 
-          // Plans
-          if (!iap.available)
+          // Plans — routed by install source
+          if (!iap.available && iap.isPlayStore)
             _UnavailableNote()
-          else ...[
-            _PlanTile(
-              productId: AppConstants.iapRemoveAds1Day,
-              storeProduct: iap.productById(AppConstants.iapRemoveAds1Day),
-              iap: iap,
-            ),
-            _PlanTile(
-              productId: AppConstants.iapRemoveAds1Week,
-              storeProduct: iap.productById(AppConstants.iapRemoveAds1Week),
-              iap: iap,
-            ),
-            _PlanTile(
-              productId: AppConstants.iapRemoveAds1Month,
-              storeProduct: iap.productById(AppConstants.iapRemoveAds1Month),
-              iap: iap,
-              isPopular: true,
-            ),
+          else if (!iap.isPlayStore) ...[
+            // ── Paystack (sideloaded install) ─────────────────────────────────
+            _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Day,
+                label: '1 Day',   sublabel: 'Try it out',            iap: iap),
+            _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Week,
+                label: '1 Week',  sublabel: 'Best value short-term', iap: iap),
+            _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Month,
+                label: '1 Month', sublabel: '🔥 Most popular',       iap: iap,
+                isPopular: true),
+            _PaystackPlanTile(productId: 'remove_ads_perm',
+                label: 'Forever', sublabel: 'One-time · Never expires', iap: iap),
+            const SizedBox(height: 6),
+            const Text('Payments via Paystack · Secure · NGN',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 10, fontFamily: 'Poppins',
+                    color: AppColors.white20)),
+          ] else ...[
+            // ── Google Play IAP ───────────────────────────────────────────────
+            _PlanTile(productId: AppConstants.iapRemoveAds1Day,
+                storeProduct: iap.productById(AppConstants.iapRemoveAds1Day), iap: iap),
+            _PlanTile(productId: AppConstants.iapRemoveAds1Week,
+                storeProduct: iap.productById(AppConstants.iapRemoveAds1Week), iap: iap),
+            _PlanTile(productId: AppConstants.iapRemoveAds1Month,
+                storeProduct: iap.productById(AppConstants.iapRemoveAds1Month),
+                iap: iap, isPopular: true),
           ],
 
           const SizedBox(height: 16),
@@ -398,6 +407,110 @@ class _PlanTile extends StatelessWidget {
                   ),
           ]),
         ),
+      ),
+    );
+  }
+}
+
+// ── Paystack plan tile (sideloaded installs) ──────────────────────────────────
+class _PaystackPlanTile extends StatefulWidget {
+  final String     productId, label, sublabel;
+  final IapService iap;
+  final bool       isPopular;
+
+  const _PaystackPlanTile({
+    required this.productId,
+    required this.label,
+    required this.sublabel,
+    required this.iap,
+    this.isPopular = false,
+  });
+
+  @override
+  State<_PaystackPlanTile> createState() => _PaystackPlanTileState();
+}
+
+class _PaystackPlanTileState extends State<_PaystackPlanTile> {
+  bool _loading = false;
+
+  Future<void> _pay() async {
+    setState(() => _loading = true);
+    try {
+      final ok = await PaystackService().checkout(
+        context:   context,
+        productId: widget.productId,
+      );
+      if (ok && mounted) {
+        await widget.iap.grantPaystackPurchase(widget.productId);
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final price = PaystackService.labels[widget.productId] ?? '—';
+
+    return GestureDetector(
+      onTap: _loading ? null : _pay,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: widget.isPopular
+              ? LinearGradient(colors: [
+                  AppColors.neonPurple.withOpacity(0.20),
+                  AppColors.neonBlue.withOpacity(0.15),
+                ])
+              : null,
+          color:  widget.isPopular ? null : AppColors.white10,
+          border: Border.all(
+            color: widget.isPopular
+                ? AppColors.neonPurple.withOpacity(0.50)
+                : AppColors.white20,
+            width: widget.isPopular ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.label,
+                    style: const TextStyle(
+                        fontSize: 15, fontFamily: 'Poppins',
+                        fontWeight: FontWeight.w700, color: AppColors.white)),
+                if (widget.sublabel.isNotEmpty)
+                  Text(widget.sublabel,
+                      style: TextStyle(
+                          fontSize: 11, fontFamily: 'Poppins',
+                          color: widget.isPopular
+                              ? AppColors.neonPurple
+                              : AppColors.white40)),
+              ],
+            ),
+          ),
+          _loading
+              ? const SizedBox(width: 22, height: 22,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.neonBlue))
+              : Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    gradient: widget.isPopular ? AppColors.gradientPrimary : null,
+                    color:    widget.isPopular ? null : AppColors.white20,
+                  ),
+                  child: Text(price,
+                      style: TextStyle(
+                          fontSize: 13, fontFamily: 'Poppins',
+                          fontWeight: FontWeight.w700,
+                          color: widget.isPopular ? Colors.white : AppColors.white)),
+                ),
+        ]),
       ),
     );
   }
