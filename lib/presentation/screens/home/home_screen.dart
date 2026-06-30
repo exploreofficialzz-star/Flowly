@@ -35,8 +35,7 @@ class HomeScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 16),
-                    // Top row
+                    const SizedBox(height: 16),                    // Top row
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -107,8 +106,10 @@ class HomeScreen extends StatelessWidget {
                                           fontFamily: 'Poppins',
                                           color: AppColors.white)),
                                   Text(
-                                    'Level ${game.currentLevelInWorld + 1}'
-                                    ' of ${AppConstants.levelsPerWorld}',
+                                    game.isEndlessLevel
+                                        ? 'Level ${game.currentLevelInWorld + 1} · infinite'
+                                        : 'Level ${game.currentLevelInWorld + 1}'
+                                          ' of ${AppConstants.levelsPerWorld}',
                                     style: TextStyle(
                                         fontSize: 13,
                                         fontFamily: 'Poppins',
@@ -122,8 +123,10 @@ class HomeScreen extends StatelessWidget {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
-                              value: game.currentLevelInWorld /
-                                  AppConstants.levelsPerWorld,
+                              value: game.isEndlessLevel
+                                  ? 1.0
+                                  : (game.currentLevelInWorld + 1) /
+                                      AppConstants.levelsPerWorld,
                               backgroundColor: AppColors.white10,
                               valueColor: AlwaysStoppedAnimation(
                                   Color(world['primaryColor'] as int)),
@@ -220,6 +223,9 @@ class HomeScreen extends StatelessWidget {
                 ),
               ),
             ),
+            // Streak milestone reward popup (topmost layer)
+            if (game.pendingStreakReward != null)
+              _StreakRewardPopup(reward: game.pendingStreakReward!),
           ],
         ),
       ),
@@ -433,4 +439,123 @@ class _Orb extends StatelessWidget {
               RadialGradient(colors: [color.withOpacity(0.12), Colors.transparent]),
         ),
       );
+}
+
+// ── Streak milestone reward popup ─────────────────────────────────────────────
+class _StreakRewardPopup extends StatelessWidget {
+  final StreakReward reward;
+  const _StreakRewardPopup({required this.reward});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasAdFree = reward.adFreeHours > 0;
+
+    return Positioned.fill(
+      child: GestureDetector(
+        onTap: () {}, // absorb taps behind the card
+        child: Container(
+          color: Colors.black.withOpacity(0.65),
+          child: Center(
+            child: GlassCard(
+              padding: const EdgeInsets.all(28),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text('🔥', style: TextStyle(fontSize: 52))
+                    .animate()
+                    .scale(duration: 500.ms, curve: Curves.elasticOut),
+                const SizedBox(height: 10),
+                Text('${reward.streak}-Day Streak!',
+                    style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: 'Poppins',
+                        color: AppColors.white)),
+                const SizedBox(height: 6),
+                const Text('You\'ve played every day — here\'s your reward',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'Poppins',
+                        color: AppColors.white40)),
+                const SizedBox(height: 20),
+
+                // Reward chips
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (reward.hints > 0)
+                      _RewardChip(
+                        icon: '💡',
+                        label: '+${reward.hints} Hints',
+                        color: AppColors.neonYellow,
+                      ),
+                    if (hasAdFree) ...[
+                      const SizedBox(width: 12),
+                      _RewardChip(
+                        icon: '🚫',
+                        label: '${reward.adFreeHours}h Ad-Free',
+                        color: AppColors.neonGreen,
+                      ),
+                    ],
+                  ],
+                ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.2),
+                const SizedBox(height: 24),
+
+                GestureDetector(
+                  onTap: () => context.read<GameProvider>().clearStreakReward(),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      gradient: AppColors.gradientPrimary,
+                      boxShadow: [
+                        BoxShadow(
+                            color: AppColors.neonBlue.withOpacity(0.4),
+                            blurRadius: 16)
+                      ],
+                    ),
+                    child: const Text('Claim Reward',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            fontFamily: 'Poppins',
+                            color: Colors.white)),
+                  ),
+                ).animate(delay: 300.ms).fadeIn().slideY(begin: 0.3),
+              ]),
+            ).animate().scale(duration: 400.ms, curve: Curves.easeOutBack),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RewardChip extends StatelessWidget {
+  final String icon, label;
+  final Color color;
+  const _RewardChip({required this.icon, required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: color.withOpacity(0.12),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Column(children: [
+        Text(icon, style: const TextStyle(fontSize: 20)),
+        const SizedBox(height: 4),
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'Poppins',
+                color: color)),
+      ]),
+    );
+  }
 }

@@ -56,9 +56,10 @@ class WorldsScreen extends StatelessWidget {
                   itemCount: AppConstants.worlds.length,
                   itemBuilder: (context, worldIdx) {
                     final world = AppConstants.worlds[worldIdx];
+                    final isEndless = worldIdx == 5;
                     final isUnlocked = worldIdx == 0 ||
                         (game.totalLevelsCompleted >= worldIdx * AppConstants.levelsPerWorld);
-                    final completed = (worldIdx == game.currentWorldIndex)
+                    final completed = (worldIdx == game.currentWorldIndex && !isEndless)
                         ? game.currentLevelInWorld
                         : (worldIdx < game.currentWorldIndex ? AppConstants.levelsPerWorld : 0);
                     final color = Color(world['primaryColor'] as int);
@@ -107,16 +108,18 @@ class WorldsScreen extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    isUnlocked
-                                        ? '$completed / ${AppConstants.levelsPerWorld} levels'
-                                        : 'Complete prev world to unlock',
+                                    !isUnlocked
+                                        ? 'Complete prev world to unlock'
+                                        : isEndless
+                                            ? 'Infinite levels · no limit ♾️'
+                                            : '$completed / ${AppConstants.levelsPerWorld} levels',
                                     style: TextStyle(
                                       fontSize: 12,
                                       fontFamily: 'Poppins',
                                       color: AppColors.white40,
                                     ),
                                   ),
-                                  if (isUnlocked) ...[
+                                  if (isUnlocked && !isEndless) ...[
                                     const SizedBox(height: 8),
                                     ClipRRect(
                                       borderRadius: BorderRadius.circular(4),

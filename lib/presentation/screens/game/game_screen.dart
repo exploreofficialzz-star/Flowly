@@ -1263,22 +1263,32 @@ class _WinOverlay extends StatefulWidget {
 }
 
 class _WinOverlayState extends State<_WinOverlay> {
-  bool _adShown       = false;
+  bool _adShown        = false;
   int  _competitionPts = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Show interstitial ad (non-premium only)
-      final iap = IapService();
-      if (!_adShown && !iap.adsRemoved) {
+      final iap  = IapService();
+      final game = context.read<GameProvider>();
+
+      // Interstitial fires every N levels (AppConstants.interstitialEveryNLevels)
+      // — not on every win. Right after it's dismissed, nudge with Remove Ads.
+      if (!_adShown && !iap.adsRemoved && game.shouldShowInterstitial) {
         _adShown = true;
-        AdService().showInterstitial(onDismissed: () {});
+        AdService().showInterstitial(onDismissed: () {
+          if (mounted) {
+            Future.delayed(const Duration(milliseconds: 250), () {
+              if (mounted && !IapService().adsRemoved) {
+                RemoveAdsSheet.show(context);
+              }
+            });
+          }
+        });
       }
 
       // Submit competition score
-      final game = context.read<GameProvider>();
       final pts = await CompetitionService().submitLevelScore(
         colorCount:  game.currentColorCount,
         movesUsed:   game.moves,

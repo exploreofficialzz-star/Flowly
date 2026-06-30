@@ -5,9 +5,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/models/game_model.dart';
 import '../../data/levels/level_generator.dart';
 import '../../services/audio_service.dart';
+import '../../services/iap_service.dart';
 import '../../core/constants/app_constants.dart';
 
 enum GameStatus { idle, playing, won, gameOver }
+
+/// Carries the pending streak milestone reward (shown once as a popup).
+class StreakReward {
+  final int streak;
+  final int hints;
+  final int adFreeHours;
+  const StreakReward({
+    required this.streak,
+    required this.hints,
+    required this.adFreeHours,
+  });
+}
 
 class PourEvent {
   final int fromIndex;
@@ -84,13 +97,18 @@ class GameProvider extends ChangeNotifier {
 
   // ── Competition timing & color count ──────────────────────────────────────
   DateTime? _levelStartTime;
-  /// Seconds elapsed since current level started (used for competition scoring)
   int get elapsedSeconds => _levelStartTime != null
       ? DateTime.now().difference(_levelStartTime!).inSeconds
       : 120;
-  /// Number of distinct colors in the current level
-  int get currentColorCount =>
-      _allLevels[_currentLevelId.clamp(0, _allLevels.length - 1)].colorCount;
+  int get currentColorCount => _currentLevelConfig?.colorCount ?? 4;
+
+  // Active level config (supports infinite levels beyond index 99)
+  LevelConfig? _currentLevelConfig;
+
+  // Pending streak milestone reward — UI shows popup then clears this
+  StreakReward? _pendingStreakReward;
+  StreakReward? get pendingStreakReward => _pendingStreakReward;
+  void clearStreakReward() { _pendingStreakReward = null; notifyListeners(); }
 
   // ── Init ────────────────────────────────────────────────────────────────────
   Future<void> init() async {
@@ -109,15 +127,15 @@ class GameProvider extends ChangeNotifier {
 
     _audio.init().catchError((_) {});
 
-    final idx = (_currentWorldIndex * 20 + _currentLevelInWorld)
-        .clamp(0, _allLevels.length - 1);
-    _loadLevelInternal(idx);
+    final idx = prefs.getInt(AppConstants.keyCurrentLevel) ?? 0;
+    _loadLevelInternal(idx.clamp(0, 999999));
   }
 
   void _loadLevelInternal(int globalId) {
-    final idx = globalId.clamp(0, _allLevels.length - 1);
-    final lvl = _allLevels[idx];
-    _currentLevelId        = idx;
+    // Use LevelGenerator.levelAt() which handles both campaign (0-99) and endless (100+)
+    final lvl = LevelGenerator.levelAt(globalId);
+    _currentLevelConfig = lvl;
+    _currentLevelId        = globalId;
     _currentWorldIndex     = lvl.worldId;
     _currentLevelInWorld   = lvl.levelInWorld;
     _maxMoves              = lvl.maxMoves;
@@ -150,9 +168,20 @@ class GameProvider extends ChangeNotifier {
   }
 
   void nextLevel() {
-    final next = _currentLevelId + 1;
-    if (next < _allLevels.length) loadLevel(next);
+    // No upper bound — LevelGenerator.levelAt() generates campaign levels for
+    // ids 0-99 and infinite Endless levels for id 100+.
+    loadLevel(_currentLevelId + 1);
   }
+
+  /// Jumps straight into Endless Mode from anywhere (e.g. a menu button).
+  /// Always lands on a fresh endless level the player hasn't necessarily seen,
+  /// keeping at least 100 as the floor.
+  void startEndlessMode() {
+    final start = max(100, _currentLevelId + 1);
+    loadLevel(start);
+  }
+
+  bool get isEndlessLevel => _currentLevelId >= 100;
 
   // ── Tube selection & pour ───────────────────────────────────────────────────
   void selectTube(int index) {
@@ -278,11 +307,17 @@ class GameProvider extends ChangeNotifier {
   }
 
   int _calculateStars() {
-    final optimal = _allLevels[_currentLevelId].colorCount * 4;
+    final optimal = currentColorCount * 4;
     if (_moves <= optimal)                    return 3;
     if (_moves <= (optimal * 1.6).round())    return 2;
     return 1;
   }
+
+  /// True when the just-completed level should trigger an interstitial,
+  /// based on AppConstants.interstitialEveryNLevels (currently every 2 wins).
+  bool get shouldShowInterstitial =>
+      _totalLevelsCompleted > 0 &&
+      _totalLevelsCompleted % AppConstants.interstitialEveryNLevels == 0;
 
   // ── Undo ────────────────────────────────────────────────────────────────────
   void undo() {
@@ -376,8 +411,9 @@ class GameProvider extends ChangeNotifier {
   Future<void> _saveProgress() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(AppConstants.keyCurrentLevel,         _currentLevelId);
       await prefs.setInt(AppConstants.keyCurrentWorld,         _currentWorldIndex);
-      await prefs.setInt(AppConstants.keyCurrentLevel,         _currentLevelInWorld);
+      await prefs.setInt(AppConstants.keyCurrentLevel,         _currentLevelId);
       await prefs.setInt(AppConstants.keyTotalLevelsCompleted, _totalLevelsCompleted);
       await prefs.setInt(AppConstants.keyTotalHints,           _hints);
     } catch (_) {}
@@ -395,13 +431,58 @@ class GameProvider extends ChangeNotifier {
       if (lastStr == todayStr) return;
       final last = DateTime.tryParse(lastStr);
       if (last != null) {
-        final diff  = today.difference(last).inDays;
+        final diff   = today.difference(last).inDays;
         _dailyStreak = diff == 1 ? _dailyStreak + 1 : 1;
+        // Check streak milestones after updating
+        _checkStreakMilestone(_dailyStreak, prefs);
       }
       prefs.setInt(AppConstants.keyDailyStreak,    _dailyStreak);
       prefs.setString(AppConstants.keyLastPlayDate, todayStr);
     } catch (_) {}
   }
 
+  /// Checks if the new streak day hits a reward milestone. Grants reward once.
+  void _checkStreakMilestone(int streak, SharedPreferences prefs) {
+    final milestones = AppConstants.streakHintRewards.keys.toList()..sort();
+    for (final day in milestones) {
+      if (streak == day) {
+        final claimedKey = '${AppConstants.keyStreakClaimedPrefix}$day';
+        if (prefs.getBool(claimedKey) == true) return; // already claimed
+
+        final hints    = AppConstants.streakHintRewards[day] ?? 0;
+        final adHours  = AppConstants.streakAdFreeHours[day] ?? 0;
+
+        // Grant hints immediately
+        if (hints > 0) {
+          _hints += hints;
+          prefs.setInt(AppConstants.keyTotalHints, _hints);
+        }
+
+        // Grant ad-free time via IapService
+        if (adHours > 0) {
+          IapService().grantStreakAdFree(adHours);
+        }
+
+        // Mark claimed
+        prefs.setBool(claimedKey, true);
+
+        // Queue the reward popup for the UI
+        _pendingStreakReward = StreakReward(
+          streak:      day,
+          hints:       hints,
+          adFreeHours: adHours,
+        );
+        notifyListeners();
+        return; // only one milestone per update
+      }
+    }
+  }
+      final lastStr  = prefs.getString(AppConstants.keyLastPlayDate);
+      if (lastStr == null) {
+        prefs.setString(AppConstants.keyLastPlayDate, todayStr);
+        return;
+      }
+      if (lastStr == todayStr) return;
+      final last = DateTime.tryParse(lastStr);
   void _tryHaptic(Future<void> Function() fn) => fn().catchError((_) {});
 }

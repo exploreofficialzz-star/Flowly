@@ -36,32 +36,38 @@ class AppConstants {
   // ── Game config ─────────────────────────────────────────────────────────────
   static const totalWorlds              = 5;
   static const levelsPerWorld           = 20;
-  static const interstitialEveryNLevels = 1;
+  static const interstitialEveryNLevels = 2; // ad every 2 completed levels
   static const maxUndoStack             = 30;
 
   // Starting hints for every new player
   static const initialHints = 2;
 
   // Move limit = colorCount * 4 + bonus
-  // Kept tight so the game stays energetic; rewarded ad grants +5 more
-  static const moveBonusEasy   = 6;  // 3 colors → 18 moves, 4 colors → 22
-  static const moveBonusMedium = 8;  // 5 colors → 28, 6 colors → 32
-  static const moveBonusHard   = 6;  // 7 colors → 34
-  static const moveBonusExpert = 4;  // 8 colors → 36
+  static const moveBonusEasy    = 6;
+  static const moveBonusMedium  = 8;
+  static const moveBonusHard    = 6;
+  static const moveBonusExpert  = 4;
+  static const moveBonusEndless = 15; // generous buffer for infinite mode
 
   // Extra moves granted per rewarded-ad watch
   static const extraMovesPerAd = 5;
-  // Remaining moves threshold at which counter turns red
   static const lowMovesWarning = 5;
 
-  // ── World definitions ───────────────────────────────────────────────────────
+  // ── World definitions ─────────────────────────────────────────────────────────
   static const worlds = [
     {'name': 'Ocean Deep',  'emoji': '🌊', 'primaryColor': 0xFF00C8FF, 'bgColor': 0xFF050F20},
     {'name': 'Neon City',   'emoji': '🌆', 'primaryColor': 0xFFB400FF, 'bgColor': 0xFF120A20},
     {'name': 'Forest Glow', 'emoji': '🌿', 'primaryColor': 0xFF00FF96, 'bgColor': 0xFF051508},
     {'name': 'Fire Realm',  'emoji': '🔥', 'primaryColor': 0xFFFF8C00, 'bgColor': 0xFF1A0800},
     {'name': 'Cosmic Void', 'emoji': '🌌', 'primaryColor': 0xFF7B61FF, 'bgColor': 0xFF08051A},
+    {'name': 'Endless Mode','emoji': '♾️', 'primaryColor': 0xFFFF00FF, 'bgColor': 0xFF0A020F},
   ];
+
+  // ── Streak milestone rewards ─────────────────────────────────────────────────
+  // day → hints granted at that milestone
+  static const streakHintRewards = {3: 2, 7: 5, 14: 10, 30: 15};
+  // day → hours of ad-free granted (0 = none)
+  static const streakAdFreeHours = {3: 0, 7: 0, 14: 1, 30: 3};
 
   // ── Competition ─────────────────────────────────────────────────────────────
   static const supportEmail      = 'chastechnologiesllc@gmail.com';
@@ -78,6 +84,7 @@ class AppConstants {
   static const keyLastPlayDate         = 'last_play_date';
   static const keyTotalHints           = 'total_hints';
   static const keySoundEnabled         = 'sound_enabled';
+  static const keyStreakClaimedPrefix  = 'streak_claimed_'; // + milestone day
   static const keyMusicEnabled         = 'music_enabled';
   static const keyHapticsEnabled       = 'haptics_enabled';
   static const keyTotalStars           = 'total_stars';

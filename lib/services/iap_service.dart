@@ -199,6 +199,12 @@ class IapService extends ChangeNotifier {
     }
   }
 
+  // ── Streak reward grant (called from GameProvider on milestone) ──────────────
+  Future<void> grantStreakAdFree(int hours) async {
+    if (hours <= 0) return;
+    await _grantDuration(Duration(hours: hours));
+  }
+
   Future<void> _grantDuration(Duration d) async {
     final base = (_removeAdsExpiry != null && _removeAdsExpiry!.isAfter(DateTime.now()))
         ? _removeAdsExpiry!
