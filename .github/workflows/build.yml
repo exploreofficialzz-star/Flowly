@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  FLUTTER_VERSION: '3.16.9'
+  FLUTTER_VERSION: '3.27.0'
   JAVA_VERSION: '17'
 
 jobs:
@@ -60,35 +60,38 @@ jobs:
           storeFile=keystore.jks
           EOF
 
-      - name: Build APK (debug)
+      - name: Build universal APK (debug)
         if: github.event_name == 'pull_request'
-        run: flutter build apk --debug --split-per-abi
+        run: flutter build apk --debug
 
-      - name: Build APK (release)
+      - name: Build universal APK (release)
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release
 
       - name: Build AAB (release)
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         run: flutter build appbundle --release
 
-      - name: Verify AAB exists
+      - name: Verify builds exist
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
           AAB=build/app/outputs/bundle/release/app-release.aab
-          if [ ! -f "$AAB" ]; then
-            echo "❌  AAB not found at $AAB"
-            exit 1
+          if [ ! -f "$APK" ]; then
+            echo "❌  APK not found at $APK"; exit 1
           fi
-          SIZE=$(du -sh "$AAB" | cut -f1)
-          echo "✅  AAB produced — $AAB ($SIZE)"
+          if [ ! -f "$AAB" ]; then
+            echo "❌  AAB not found at $AAB"; exit 1
+          fi
+          echo "✅  APK — $(du -sh $APK | cut -f1)"
+          echo "✅  AAB — $(du -sh $AAB | cut -f1)"
 
-      - name: Upload APK artefacts (debug)
+      - name: Upload APK artefact (debug)
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: flowly-apk-debug-${{ github.sha }}
-          path: build/app/outputs/flutter-apk/*.apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 14
 
       - name: Upload APK + AAB artefacts (release)
@@ -97,7 +100,7 @@ jobs:
         with:
           name: flowly-release-${{ github.sha }}
           path: |
-            build/app/outputs/flutter-apk/*-release.apk
+            build/app/outputs/flutter-apk/app-release.apk
             build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
@@ -161,13 +164,14 @@ jobs:
             ### 📦 Included builds
             | File | Use |
             |------|-----|
-            | `app-arm64-v8a-release.apk` | Modern Android devices |
-            | `app-armeabi-v7a-release.apk` | Older Android devices |
-            | `app-x86_64-release.apk` | Emulators / x86 devices |
+            | `app-release.apk` | ✅ **Universal APK — works on ALL Android phones** |
             | `app-release.aab` | ✅ **Upload this to Google Play** |
             | `flowly.ipa` | iOS (requires code-signing) |
+
+            > The universal APK includes all CPU architectures (arm64, arm32, x86_64)
+            > in one file — install it on any Android device directly.
           files: |
-            flowly-release-*/flutter-apk/*-release.apk
+            flowly-release-*/app-release.apk
             flowly-release-*/bundle/release/app-release.aab
             flowly-ipa-*/flowly.ipa
         env:
