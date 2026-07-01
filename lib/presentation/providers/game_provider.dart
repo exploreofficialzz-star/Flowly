@@ -112,10 +112,12 @@ class GameProvider extends ChangeNotifier {
 
   // ── Init ────────────────────────────────────────────────────────────────────
   Future<void> init() async {
+    int savedLevelId = 0;
     try {
       final prefs = await SharedPreferences.getInstance();
       _currentWorldIndex = prefs.getInt(AppConstants.keyCurrentWorld) ?? 0;
       _currentLevelInWorld = prefs.getInt(AppConstants.keyCurrentLevel) ?? 0;
+      savedLevelId = prefs.getInt(AppConstants.keyCurrentLevel) ?? 0;
       _totalLevelsCompleted =
           prefs.getInt(AppConstants.keyTotalLevelsCompleted) ?? 0;
       _dailyStreak = prefs.getInt(AppConstants.keyDailyStreak) ?? 0;
@@ -127,8 +129,7 @@ class GameProvider extends ChangeNotifier {
 
     _audio.init().catchError((_) {});
 
-    final idx = prefs.getInt(AppConstants.keyCurrentLevel) ?? 0;
-    _loadLevelInternal(idx.clamp(0, 999999));
+    _loadLevelInternal(savedLevelId.clamp(0, 999999));
   }
 
   void _loadLevelInternal(int globalId) {
@@ -413,7 +414,6 @@ class GameProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(AppConstants.keyCurrentLevel,         _currentLevelId);
       await prefs.setInt(AppConstants.keyCurrentWorld,         _currentWorldIndex);
-      await prefs.setInt(AppConstants.keyCurrentLevel,         _currentLevelId);
       await prefs.setInt(AppConstants.keyTotalLevelsCompleted, _totalLevelsCompleted);
       await prefs.setInt(AppConstants.keyTotalHints,           _hints);
     } catch (_) {}
@@ -477,12 +477,6 @@ class GameProvider extends ChangeNotifier {
       }
     }
   }
-      final lastStr  = prefs.getString(AppConstants.keyLastPlayDate);
-      if (lastStr == null) {
-        prefs.setString(AppConstants.keyLastPlayDate, todayStr);
-        return;
-      }
-      if (lastStr == todayStr) return;
-      final last = DateTime.tryParse(lastStr);
+
   void _tryHaptic(Future<void> Function() fn) => fn().catchError((_) {});
 }

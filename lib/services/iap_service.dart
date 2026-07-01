@@ -37,14 +37,6 @@ class IapService extends ChangeNotifier {
 
   bool get isPlayStore => _isPlayStore;
 
-  ProductDetails? productById(String id) {
-    try {
-      return _products.firstWhere((p) => p.id == id);
-    } catch (_) {
-      return null;
-    }
-  }
-
   // ── Init ────────────────────────────────────────────────────────────────────
   Future<void> init() async {
     await _loadExpiry();

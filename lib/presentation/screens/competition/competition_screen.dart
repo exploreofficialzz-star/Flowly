@@ -265,7 +265,7 @@ class _Row extends StatelessWidget {
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                 fontFamily: 'Poppins',
                 color: isUser ? AppColors.neonBlue
-                    : isElite ? const Color(0xFFFFD700) : AppColors.white60)),
+                    : isElite ? const Color(0xFFFFD700) : AppColors.white70)),
         // Prize badge
         if (prize != null) ...[
           const SizedBox(width: 6),
@@ -394,7 +394,7 @@ class _Feed extends StatelessWidget {
             const SizedBox(width: 5),
             Expanded(child: Text(e.text, overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 11, fontFamily: 'Poppins',
-                    color: AppColors.white60))),
+                    color: AppColors.white70))),
           ]),
         )),
       ]),
