@@ -14,32 +14,38 @@ class AdBlockService extends ChangeNotifier {
   Timer? _timer;
 
   // ── Ad-network endpoints to probe ─────────────────────────────────────────
-  // These are live HTTPS URLs across multiple Google ad-serving domains.
-  // A VPN/DNS/hosts-file blocker will prevent TCP connection to these.
-  // Any HTTP response code (200, 301, 403, 404 …) = endpoint reachable = NOT blocked.
-  // Connection timeout / refused / DNS failure = blocked.
-  //
-  // Using 6 independent endpoints across 4 different hostnames so that:
-  //   • A single CDN hiccup doesn't cause a false positive
-  //   • Partial blockers (blocking some but not all) are still caught
+  // Reduced from 6 to 3: still spans multiple Google ad-serving hostnames
+  // (a single CDN edge hiccup won't false-positive), at half the network
+  // traffic of every periodic check.
   static const _endpoints = [
-    // Google DoubleClick (core AdMob delivery)
     'https://googleads.g.doubleclick.net/pagead/id',
-    'https://securepubads.g.doubleclick.net/gpt/pubads_impl.js',
-    // Google Syndication (AdSense / AdMob fallback)
     'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js',
-    // Google Ad Services
-    'https://adservice.google.com/adsid/integrator.js',
-    // Google Tag Services (used by AdMob mediation)
     'https://www.googletagservices.com/tag/js/gpt.js',
-    // Static DoubleClick assets
-    'https://static.doubleclick.net/instream/ad_status.js',
   ];
 
   Future<void> init() async {
-    await _check();
-    // Re-check every 20 s — fast enough to react, light on battery
-    _timer = Timer.periodic(const Duration(seconds: 20), (_) => _check());
+    unawaited(_check());
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _timer?.cancel();
+    // 45s: ad-blocker state changes are rare and non-urgent — this isn't a
+    // security boundary, just a monetization nudge. Slower polling here
+    // cuts continuous background network traffic substantially.
+    _timer = Timer.periodic(const Duration(seconds: 45), (_) => _check());
+  }
+
+  /// Stops background polling — call when the app is backgrounded.
+  void pause() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  /// Resumes polling and immediately re-checks — call on app foreground.
+  void resume() {
+    _check();
+    _startPolling();
   }
 
   /// Force an immediate re-check (called by "I've Enabled Ads" button).

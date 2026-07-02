@@ -34,22 +34,16 @@ class ConnectivityService extends ChangeNotifier {
   Timer? _pollTimer;
   bool  _inCheck = false;
 
-  // ── Seven endpoints across FOUR independent providers ─────────────────────
-  // • Google  (Android's own connectivity check — returns 204 on success)
-  // • Apple   (returns 200 + short HTML body)
-  // • Microsoft (returns literal text "Microsoft Connect Test")
-  // • Cloudflare (one.one.one.one landing page)
-  //
-  // Using HTTP (not HTTPS) where possible so TLS handshake latency doesn't
-  // inflate RTT and give false "weak" readings.
+  // ── Probe endpoints across THREE independent providers ────────────────────
+  // Reduced from 7 to 3: still multi-provider redundant (a single CDN or
+  // provider hiccup won't cause a false reading), but cuts per-check network
+  // traffic by more than half. Every additional endpoint is one more real
+  // HTTP round-trip repeated forever on a timer — for a puzzle game, 3
+  // well-chosen, independently-operated targets are enough signal.
   static const _probeTargets = [
-    'http://connectivitycheck.gstatic.com/generate_204',   // Google Android ①
-    'http://www.google.com/generate_204',                   // Google ②
-    'https://clients3.google.com/generate_204',             // Google ③
-    'http://connectivitycheck.android.com/generate_204',    // AOSP ④
-    'http://captive.apple.com/hotspot-detect.html',         // Apple ⑤
-    'http://www.msftconnecttest.com/connecttest.txt',        // Microsoft ⑥
-    'https://one.one.one.one/',                              // Cloudflare ⑦
+    'http://connectivitycheck.gstatic.com/generate_204',   // Google Android
+    'http://www.msftconnecttest.com/connecttest.txt',       // Microsoft
+    'https://one.one.one.one/',                              // Cloudflare
   ];
 
   // Thresholds
@@ -58,13 +52,33 @@ class ConnectivityService extends ChangeNotifier {
   static const _probeTimeoutMs  = 5000;
 
   Future<void> init() async {
-    await _check();
+    // Fire the first check but don't let callers block on it — see main.dart.
+    unawaited(_check());
     _radioSub = Connectivity()
         .onConnectivityChanged
         .listen((_) => _check());
-    // Poll every 8 s; short enough to feel instant, easy on battery
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    // 25s: still catches a dropped connection well within one short puzzle
+    // level, at roughly a third of the previous network traffic volume.
     _pollTimer =
-        Timer.periodic(const Duration(seconds: 8), (_) => _check());
+        Timer.periodic(const Duration(seconds: 25), (_) => _check());
+  }
+
+  /// Stops background polling — call when the app is backgrounded.
+  /// No user is watching the connectivity gate while the app isn't visible.
+  void pause() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  /// Resumes polling and immediately re-checks — call on app foreground.
+  void resume() {
+    _check();
+    _startPolling();
   }
 
   Future<void> recheck() => _check();

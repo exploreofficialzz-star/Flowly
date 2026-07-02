@@ -26,12 +26,19 @@ void main() async {
   // AdMob must be ready before anything tries to create a BannerAd.
   await AdService().init();
   // IAP: restore any active Remove-Ads subscription from SharedPreferences.
+  // Local disk read only — no network — safe and fast to await.
   await IapService().init();
   await CompetitionService().init();
-  // Connectivity: begins radio + DNS probing immediately (fire-and-forget).
-  await ConnectivityService().init();
-  // Ad-block detection: DNS-probe ad-serving domains (fire-and-forget).
-  AdBlockService().init();
+
+  // Connectivity + ad-block detection: BOTH do real network I/O (HTTP/TCP
+  // probes with multi-second timeouts). Neither is awaited here — awaiting
+  // either one blocks the first frame from ever painting, which on a slow
+  // or congested mobile network can hold the app on a black screen for
+  // several seconds on every single cold launch. Both default their state
+  // to "fine" until a probe says otherwise, so starting the UI immediately
+  // and letting these resolve in the background is strictly safer AND faster.
+  ConnectivityService().init();  // fire-and-forget
+  AdBlockService().init();       // fire-and-forget
 
   runApp(const FlowlyApp());
 }
@@ -62,13 +69,18 @@ class _FlowlyAppState extends State<FlowlyApp> with WidgetsBindingObserver {
       case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
         AudioService().pauseMusic();
+        // Stop background network polling while the app isn't visible —
+        // no user is watching the connectivity/ad-block gates, so probing
+        // every 8-20s here is pure battery + mobile-data waste.
+        ConnectivityService().pause();
+        AdBlockService().pause();
         break;
       case AppLifecycleState.resumed:
         // Re-probe both connectivity and ad-blocking when app comes back
         // from background — catches cases where user toggled VPN / DNS.
         AudioService().resumeMusic();
-        ConnectivityService().recheck();
-        AdBlockService().recheck();
+        ConnectivityService().resume();
+        AdBlockService().resume();
         break;
       case AppLifecycleState.inactive:
         break;

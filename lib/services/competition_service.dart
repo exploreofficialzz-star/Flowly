@@ -37,14 +37,25 @@ class CompetitionService extends ChangeNotifier {
 
   // ── Timer state ──────────────────────────────────────────────────────────────
   Timer?  _positionTimer;
-  bool    _disposed = false;
+  bool    _disposed    = false;
+  bool    _initialized = false;
 
   // ── Prize amounts (Phase 1: display only) ────────────────────────────────────
   static const prizes = {1: 50, 2: 40, 3: 30, 4: 20, 5: 10};
   static const prizeGrouped = '6-10'; // each $5
 
   // ── Init ─────────────────────────────────────────────────────────────────────
+  // Guarded: this starts a Timer.periodic AND a self-perpetuating recursive
+  // Future.delayed chain for live events (_scheduleLiveEvents). If init()
+  // ever ran twice — a hot-restart edge case, a future call site added
+  // elsewhere — each call would stack another independent timer and another
+  // independent recursive chain on top of the last, silently doubling (then
+  // tripling, etc.) CPU work and notifyListeners() traffic forever with no
+  // visible error. This service is a singleton meant to init exactly once
+  // per app lifetime, so we make that explicit instead of assuming it.
   Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
     await _loadUserData();
     await _checkAndReset();
     _startTimers();

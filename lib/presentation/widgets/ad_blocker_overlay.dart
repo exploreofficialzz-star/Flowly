@@ -26,7 +26,11 @@ class _AdBlockerGateState extends State<AdBlockerGate>
     _pulse = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
+    );
+    // Not started here — build() starts/stops it based on whether the
+    // gate is actually visible, so it never ticks while hidden (the
+    // overwhelming majority of the time, for the overwhelming majority
+    // of users who don't have an ad blocker active).
   }
 
   @override
@@ -59,8 +63,20 @@ class _AdBlockerGateState extends State<AdBlockerGate>
     final adBlock = context.watch<AdBlockService>();
     final iap     = context.watch<IapService>();
 
+    final willShow = adBlock.adBlocked && !iap.adsRemoved;
+
+    // Only tick the pulse animation while this gate is actually rendering
+    // something. Left unconditional, it burns a per-frame Ticker for the
+    // entire app lifetime on every screen for the near-totality of users
+    // who never trigger this overlay at all.
+    if (willShow && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!willShow && _pulse.isAnimating) {
+      _pulse.stop();
+    }
+
     // Premium — completely bypass
-    if (!adBlock.adBlocked || iap.adsRemoved) return const SizedBox.shrink();
+    if (!willShow) return const SizedBox.shrink();
 
     return Positioned.fill(
       child: Material(

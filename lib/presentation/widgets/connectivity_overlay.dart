@@ -31,7 +31,9 @@ class _ConnectivityGateState extends State<ConnectivityGate>
     _pulse = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
+    );
+    // Not started here — build() starts/stops it based on whether the
+    // gate is actually visible, so it never ticks while hidden.
   }
 
   @override
@@ -52,11 +54,21 @@ class _ConnectivityGateState extends State<ConnectivityGate>
       });
     }
 
-    // Nothing to show
-    if (svc.isConnected) return const SizedBox.shrink();
+    final willShow = !svc.isConnected && !(svc.isWeak && _weakDismissed);
 
-    // User tapped "Play Anyway" on the weak overlay — let them through
-    if (svc.isWeak && _weakDismissed) return const SizedBox.shrink();
+    // The pulse animation only needs to tick while something is actually
+    // on screen. Left running unconditionally, this ticks every frame for
+    // the entire app lifetime — on every screen, whether connected or not,
+    // which is the overwhelming majority of the time. Stopping it here
+    // removes that per-frame cost during normal (connected) play.
+    if (willShow && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!willShow && _pulse.isAnimating) {
+      _pulse.stop();
+    }
+
+    // Nothing to show
+    if (!willShow) return const SizedBox.shrink();
 
     return Positioned.fill(
       child: Material(
