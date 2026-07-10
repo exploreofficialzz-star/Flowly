@@ -200,17 +200,19 @@ class _RemoveAdsSheetState extends State<RemoveAdsSheet> {
             _UnavailableNote()
           else if (!iap.isPlayStore) ...[
             // ── Paystack (sideloaded install) ─────────────────────────────────
+            // Show USD prices (same as Play Store). Paystack's own payment
+            // screen will display the equivalent NGN amount automatically.
             _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Day,
-                label: '1 Day',   sublabel: 'Try it out',            iap: iap),
+                label: '1 Day',   usdPrice: '\$0.99', sublabel: 'Try it out', iap: iap),
             _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Week,
-                label: '1 Week',  sublabel: 'Best value short-term', iap: iap),
+                label: '1 Week',  usdPrice: '\$2.99', sublabel: 'Best value short-term', iap: iap),
             _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Month,
-                label: '1 Month', sublabel: '🔥 Most popular',       iap: iap,
-                isPopular: true),
+                label: '1 Month', usdPrice: '\$8.99', sublabel: '🔥 Most popular',
+                iap: iap, isPopular: true),
             _PaystackPlanTile(productId: 'remove_ads_perm',
-                label: 'Forever', sublabel: 'One-time · Never expires', iap: iap),
+                label: 'Forever', usdPrice: '\$4.99', sublabel: 'One-time · Never expires', iap: iap),
             const SizedBox(height: 6),
-            const Text('Payments via Paystack · Secure · NGN',
+            const Text('Paid securely via Paystack · Price shown in NGN on payment screen',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 10, fontFamily: 'Poppins',
                     color: AppColors.white20)),
@@ -414,7 +416,7 @@ class _PlanTile extends StatelessWidget {
 
 // ── Paystack plan tile (sideloaded installs) ──────────────────────────────────
 class _PaystackPlanTile extends StatefulWidget {
-  final String     productId, label, sublabel;
+  final String     productId, label, sublabel, usdPrice;
   final IapService iap;
   final bool       isPopular;
 
@@ -422,6 +424,7 @@ class _PaystackPlanTile extends StatefulWidget {
     required this.productId,
     required this.label,
     required this.sublabel,
+    required this.usdPrice,
     required this.iap,
     this.isPopular = false,
   });
@@ -451,7 +454,8 @@ class _PaystackPlanTileState extends State<_PaystackPlanTile> {
 
   @override
   Widget build(BuildContext context) {
-    final price = PaystackService.labels[widget.productId] ?? '—';
+    // Show the same USD price as Play Store; Paystack shows NGN on its own screen
+    final price = widget.usdPrice;
 
     return GestureDetector(
       onTap: _loading ? null : _pay,
