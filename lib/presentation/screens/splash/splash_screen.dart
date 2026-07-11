@@ -88,8 +88,9 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ]),
           ),
-          // Particles
-          ...List.generate(10, (i) => _Particle(index: i)),
+          // Particles — ONE shared ticker driving all 10, was 10 separate
+          // AnimationControllers (10 independent tickers) for one field.
+          const _ParticleField(count: 10),
           // Content
           Column(children: [
             SizedBox(height: h * 0.20),
@@ -280,51 +281,62 @@ class _LoadingDots extends StatefulWidget {
 }
 
 class _LoadingDotsState extends State<_LoadingDots>
-    with TickerProviderStateMixin {
-  late List<AnimationController> _ctrls;
+    with SingleTickerProviderStateMixin {
+  // ONE controller driving all 3 dots via staggered Interval curves —
+  // was 3 separate AnimationControllers (3 independent tickers) for
+  // what is visually a single loading indicator.
+  late AnimationController _ctrl;
+  late List<Animation<double>> _phases;
 
   @override
   void initState() {
     super.initState();
-    _ctrls = List.generate(3, (i) {
-      final c = AnimationController(
-          vsync: this, duration: const Duration(milliseconds: 500))
-        ..repeat(reverse: true);
-      Future.delayed(Duration(milliseconds: i * 160),
-          () { if (mounted) c.forward(); });
-      return c;
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200))
+      ..repeat();
+    _phases = List.generate(3, (i) {
+      final start = i * 0.16;
+      return TweenSequence<double>([
+        TweenSequenceItem(tween: Tween(begin: 0.3, end: 1.0), weight: 1),
+        TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.3), weight: 1),
+      ]).animate(CurvedAnimation(
+        parent: _ctrl,
+        curve: Interval(start, (start + 0.42).clamp(0.0, 1.0),
+            curve: Curves.easeInOut),
+      ));
     });
   }
 
   @override
   void dispose() {
-    for (final c in _ctrls) c.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(3, (i) => AnimatedBuilder(
-        animation: _ctrls[i],
-        builder: (_, __) => Container(
-          margin: const EdgeInsets.symmetric(horizontal: 5),
-          width: 8, height: 8,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppColors.neonBlue
-                .withOpacity(0.3 + 0.7 * _ctrls[i].value),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.neonBlue
-                    .withOpacity(0.4 * _ctrls[i].value),
-                blurRadius: 6,
-              ),
-            ],
-          ),
-        ),
-      )),
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(3, (i) {
+          final v = _phases[i].value;
+          return Container(
+            margin: const EdgeInsets.symmetric(horizontal: 5),
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.neonBlue.withOpacity(0.3 + 0.7 * (v - 0.3) / 0.7),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.neonBlue.withOpacity(0.4 * (v - 0.3) / 0.7),
+                  blurRadius: 6,
+                ),
+              ],
+            ),
+          );
+        }),
+      ),
     );
   }
 }
@@ -347,57 +359,85 @@ class _Orb extends StatelessWidget {
   );
 }
 
-class _Particle extends StatefulWidget {
-  final int index;
-  const _Particle({required this.index});
+// ONE shared controller drives ALL particles' opacity via per-particle
+// phase offsets — was 10 separate _Particle widgets, each with its own
+// independent AnimationController (10 concurrent tickers for what is
+// visually a single ambient dust-particle effect).
+class _ParticleField extends StatefulWidget {
+  final int count;
+  const _ParticleField({required this.count});
   @override
-  State<_Particle> createState() => _ParticleState();
+  State<_ParticleField> createState() => _ParticleFieldState();
 }
 
-class _ParticleState extends State<_Particle>
+class _ParticleFieldState extends State<_ParticleField>
     with SingleTickerProviderStateMixin {
-  late AnimationController _c;
-  late double x, y, size;
+  late AnimationController _ctrl;
+  late List<_ParticleSpec> _specs;
   final _rng = Random();
 
   @override
   void initState() {
     super.initState();
-    x = _rng.nextDouble();
-    y = _rng.nextDouble();
-    size = 1.5 + _rng.nextDouble() * 3;
-    _c = AnimationController(
-      vsync: this,
-      duration: Duration(milliseconds: 2000 + _rng.nextInt(3000)),
-    )..repeat(reverse: true);
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 3000))
+      ..repeat();
+    _specs = List.generate(widget.count, (i) {
+      return _ParticleSpec(
+        x:     _rng.nextDouble(),
+        y:     _rng.nextDouble(),
+        size:  1.5 + _rng.nextDouble() * 3,
+        phase: _rng.nextDouble(), // 0..1 offset into the shared cycle
+        colorIndex: i % 3,
+      );
+    });
   }
 
   @override
-  void dispose() { _c.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    const colors = [
-      AppColors.neonBlue,
-      AppColors.neonPurple,
-      AppColors.neonGreen
-    ];
-    final color = colors[widget.index % colors.length];
+    const colors = [AppColors.neonBlue, AppColors.neonPurple, AppColors.neonGreen];
     final sz = MediaQuery.of(context).size;
-    return Positioned(
-      left: x * sz.width,
-      top: y * sz.height,
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) => Opacity(
-          opacity: 0.05 + 0.25 * _c.value,
-          child: Container(
-            width: size, height: size,
-            decoration: BoxDecoration(
-                shape: BoxShape.circle, color: color),
-          ),
-        ),
+
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Stack(
+        children: _specs.map((p) {
+          // Each particle rides the same clock but at its own phase offset,
+          // so they don't all pulse in lockstep — same visual variety as
+          // before, one ticker instead of ten.
+          final t = (_ctrl.value + p.phase) % 1.0;
+          final wave = (sin(t * 2 * pi) + 1) / 2; // 0..1 smooth pulse
+          return Positioned(
+            left: p.x * sz.width,
+            top:  p.y * sz.height,
+            child: Opacity(
+              opacity: 0.05 + 0.25 * wave,
+              child: Container(
+                width: p.size, height: p.size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: colors[p.colorIndex],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
+}
+
+class _ParticleSpec {
+  final double x, y, size, phase;
+  final int colorIndex;
+  _ParticleSpec({
+    required this.x, required this.y, required this.size,
+    required this.phase, required this.colorIndex,
+  });
 }

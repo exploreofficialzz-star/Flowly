@@ -14,22 +14,14 @@ class CompetitionScreen extends StatefulWidget {
 }
 
 class _CompetitionScreenState extends State<CompetitionScreen> {
-  Timer? _clockTimer;
-  String _countdown = '00:00:00';
   final Map<String, int>  _prevPositions = {};
   final Map<String, bool> _movedUp       = {};
   Timer? _arrowFade;
-
-  @override
-  void initState() {
-    super.initState();
-    _tick();
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(_tick);
-    });
-  }
-
-  void _tick() => _countdown = CompetitionService().resetCountdown;
+  // Entrance fade-in should only play once per screen visit, not on every
+  // background refresh (position shuffle every 3 min, live events every
+  // ~55-125s). Re-triggering a fade on every visible row on every refresh
+  // was causing a repeating flicker across the whole leaderboard.
+  bool _hasAnimatedIn = false;
 
   void _snapshot(List<LeaderboardEntry> board) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -53,7 +45,6 @@ class _CompetitionScreenState extends State<CompetitionScreen> {
 
   @override
   void dispose() {
-    _clockTimer?.cancel();
     _arrowFade?.cancel();
     super.dispose();
   }
@@ -69,6 +60,14 @@ class _CompetitionScreenState extends State<CompetitionScreen> {
 
     final board  = svc.leaderboard;
     final events = svc.liveEvents;
+    // Capture once — rows built on this pass animate in; later rebuilds
+    // (triggered by CompetitionService refreshes) render instantly, no fade.
+    final playEntrance = !_hasAnimatedIn;
+    if (!_hasAnimatedIn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _hasAnimatedIn = true;
+      });
+    }
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -77,7 +76,7 @@ class _CompetitionScreenState extends State<CompetitionScreen> {
         child: SafeArea(
           child: Column(children: [
             // ── Header ──────────────────────────────────────────────────────
-            _Header(countdown: _countdown),
+            const _Header(),
             const SizedBox(height: 6),
 
             // ── Top-10 prize hint ────────────────────────────────────────────
@@ -93,13 +92,17 @@ class _CompetitionScreenState extends State<CompetitionScreen> {
                   final e      = board[i];
                   final isUser = !e.isBot;
                   final moved  = _movedUp[e.id];
-                  return _Row(
+                  final row = _Row(
+                    key:     ValueKey(e.id),
                     entry:   e,
                     isUser:  isUser,
                     movedUp: moved,
                     prize:   _prize(e.position),
-                  ).animate(delay: Duration(milliseconds: 15 * i.clamp(0, 20)))
-                   .fadeIn(duration: 250.ms);
+                  );
+                  if (!playEntrance) return row;
+                  return row
+                      .animate(delay: Duration(milliseconds: 15 * i.clamp(0, 20)))
+                      .fadeIn(duration: 250.ms);
                 },
               ),
             ),
@@ -126,8 +129,7 @@ class _CompetitionScreenState extends State<CompetitionScreen> {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 class _Header extends StatelessWidget {
-  final String countdown;
-  const _Header({required this.countdown});
+  const _Header();
 
   @override
   Widget build(BuildContext context) {
@@ -150,22 +152,64 @@ class _Header extends StatelessWidget {
                     color: AppColors.white40)),
           ]),
         ),
-        // Countdown chip
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            color: AppColors.bgCard,
-            border: Border.all(color: AppColors.white10),
-          ),
-          child: Row(children: [
-            const Icon(Icons.refresh_rounded, color: AppColors.white40, size: 12),
-            const SizedBox(width: 4),
-            Text(countdown,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                    fontFamily: 'Poppins', color: AppColors.white70)),
-          ]),
-        ),
+        // Isolated ticking widget — its own Timer, its own setState, scoped
+        // to itself only. Ticking the clock never touches the leaderboard,
+        // the prize hint, or anything else on this screen.
+        const _CountdownChip(),
+
+      ]),
+    );
+  }
+}
+
+// Owns its OWN Timer.periodic + setState, scoped to only this small chip.
+// Ticking every second here never rebuilds the leaderboard, prize hint,
+// or anything else — that isolation is the whole point of this widget.
+// (Previously the countdown lived on the screen's own State object, so
+// its per-second setState rebuilt the entire leaderboard ListView too —
+// every visible row, every second, forever, while this screen was open.)
+class _CountdownChip extends StatefulWidget {
+  const _CountdownChip();
+  @override
+  State<_CountdownChip> createState() => _CountdownChipState();
+}
+
+class _CountdownChipState extends State<_CountdownChip> {
+  Timer?  _timer;
+  String  _countdown = '00:00:00';
+
+  @override
+  void initState() {
+    super.initState();
+    _countdown = CompetitionService().resetCountdown;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() => _countdown = CompetitionService().resetCountdown);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: AppColors.bgCard,
+        border: Border.all(color: AppColors.white10),
+      ),
+      child: Row(children: [
+        const Icon(Icons.refresh_rounded, color: AppColors.white40, size: 12),
+        const SizedBox(width: 4),
+        Text(_countdown,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                fontFamily: 'Poppins', color: AppColors.white70)),
       ]),
     );
   }
@@ -206,7 +250,7 @@ class _Row extends StatelessWidget {
   final bool isUser;
   final bool? movedUp;
   final String? prize;
-  const _Row({required this.entry, required this.isUser,
+  const _Row({super.key, required this.entry, required this.isUser,
       this.movedUp, this.prize});
 
   @override
