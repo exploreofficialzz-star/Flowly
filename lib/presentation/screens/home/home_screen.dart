@@ -28,7 +28,12 @@ class HomeScreen extends StatelessWidget {
         decoration: const BoxDecoration(gradient: AppColors.gradientBg),
         child: Stack(
           children: [
-            _BgOrbs(),
+            // Isolated in its own compositing layer so its continuous
+            // 6-second ticker never forces a repaint of the sibling
+            // scroll content (and vice versa) — the two were sharing a
+            // layer, so scrolling and the orb animation were competing
+            // for the same repaint pass every frame.
+            RepaintBoundary(child: _BgOrbs()),
             SafeArea(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
