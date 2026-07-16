@@ -182,10 +182,6 @@ class IapService extends ChangeNotifier {
       case AppConstants.iapRemoveAds1Month:
         await _grantDuration(const Duration(days: 30));
         break;
-      case 'remove_ads_perm':
-        // Permanent: set a 10-year expiry as a practical "forever"
-        await _grantDuration(const Duration(days: 3650));
-        break;
       default:
         break;
     }

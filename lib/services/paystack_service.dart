@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../core/constants/app_constants.dart';
 
 /// Paystack checkout, implemented directly against Paystack's own
 /// "Inline.js" popup (https://js.paystack.co/v1/inline.js) inside a
@@ -37,22 +38,26 @@ class PaystackService {
 
   // ── NGN prices in kobo (NGN × 100) ──────────────────────────────────────────
   // Exchange basis: ≈ ₦1,600 / $1 — update periodically.
+  //
+  // Keyed by the SAME AppConstants product-ID constants used everywhere else
+  // (remove_ads_sheet.dart, iap_service.dart) instead of separate hardcoded
+  // string literals. Previously this map used its own literal keys
+  // ('remove_ads_1day', no underscore before "day") while AppConstants
+  // defines 'remove_ads_1_day' (with underscore) — a silent mismatch that
+  // made every Paystack purchase for 1 Day / 1 Week / 1 Month look up a
+  // price that didn't exist, return null, and fail before the checkout
+  // WebView ever opened. Keying off the shared constants makes that class
+  // of bug impossible going forward — there's only one source of truth.
   static const Map<String, int> prices = {
-    'remove_ads_1day':     150000,   // ₦1,500
-    'remove_ads_1week':    459900,   // ₦4,599
-    'remove_ads_1month':  1349900,   // ₦13,499
-    'remove_ads_perm':     749900,   // ₦7,499
-    'hints_5':             149900,   // ₦1,499
-    'hints_15':            299900,   // ₦2,999
+    AppConstants.iapRemoveAds1Day:    150000,   // ₦1,500
+    AppConstants.iapRemoveAds1Week:   459900,   // ₦4,599
+    AppConstants.iapRemoveAds1Month: 1349900,   // ₦13,499
   };
 
   static const Map<String, String> labels = {
-    'remove_ads_1day':   '₦1,500',
-    'remove_ads_1week':  '₦4,599',
-    'remove_ads_1month': '₦13,499',
-    'remove_ads_perm':   '₦7,499',
-    'hints_5':           '₦1,499',
-    'hints_15':          '₦2,999',
+    AppConstants.iapRemoveAds1Day:   '₦1,500',
+    AppConstants.iapRemoveAds1Week:  '₦4,599',
+    AppConstants.iapRemoveAds1Month: '₦13,499',
   };
 
   // ── Play Store detection ──────────────────────────────────────────────────

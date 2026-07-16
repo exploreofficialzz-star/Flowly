@@ -209,8 +209,6 @@ class _RemoveAdsSheetState extends State<RemoveAdsSheet> {
             _PaystackPlanTile(productId: AppConstants.iapRemoveAds1Month,
                 label: '1 Month', usdPrice: '\$8.99', sublabel: '🔥 Most popular',
                 iap: iap, isPopular: true),
-            _PaystackPlanTile(productId: 'remove_ads_perm',
-                label: 'Forever', usdPrice: '\$4.99', sublabel: 'One-time · Never expires', iap: iap),
             const SizedBox(height: 6),
             const Text('Paid securely via Paystack · Price shown in NGN on payment screen',
                 textAlign: TextAlign.center,
