@@ -19,8 +19,18 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final game = context.watch<GameProvider>();
+    final game  = context.watch<GameProvider>();
     final world = AppConstants.worlds[game.currentWorldIndex];
+
+    // Adaptive scale: shrinks spacing/text proportionally on short screens
+    // so more content fits without scrolling. Reference height (844) is a
+    // standard mid-size phone; floor of 0.82 keeps text legible on the
+    // smallest real devices; capped at 1.0 so this never grows content
+    // oversized on taller phones (large screens are handled separately
+    // below via a max-width cap instead of stretching everything bigger).
+    final screenH = MediaQuery.sizeOf(context).height;
+    final scale   = (screenH / 844).clamp(0.82, 1.0);
+    double gap(double v) => v * scale;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -35,12 +45,32 @@ class HomeScreen extends StatelessWidget {
             // for the same repaint pass every frame.
             RepaintBoundary(child: _BgOrbs()),
             SafeArea(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 16),                    // Top row
+              child: MediaQuery(
+                // Scales all text in this subtree by the same factor as the
+                // spacing gaps below, so short screens shrink proportionally
+                // as one coherent layout rather than just getting tighter
+                // gaps between still full-size text/cards. The device's own
+                // scale is sampled via scale(100)/100 (works whether the
+                // platform scaler is linear or not) so this compounds with,
+                // rather than overrides, the user's accessibility text-size
+                // setting.
+                data: MediaQuery.of(context).copyWith(
+                  textScaler: TextScaler.linear(
+                    (MediaQuery.textScalerOf(context).scale(100) / 100) * scale,
+                  ),
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    // Caps content width on tablets/large screens so it
+                    // doesn't stretch edge-to-edge; on phones this is a
+                    // no-op since 480 exceeds typical phone widths.
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.symmetric(horizontal: gap(24)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(height: gap(16)),                    // Top row
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -82,13 +112,13 @@ class HomeScreen extends StatelessWidget {
                         ),
                       ],
                     ).animate().fadeIn(duration: 500.ms),
-                    const SizedBox(height: 24),
+                    SizedBox(height: gap(24)),
 
                     // Remove Ads banner
                     const RemoveAdsBanner()
                         .animate()
                         .fadeIn(delay: 150.ms),
-                    const SizedBox(height: 16),
+                    SizedBox(height: gap(16)),
 
                     // Current world card
                     GlassCard(
@@ -124,7 +154,7 @@ class HomeScreen extends StatelessWidget {
                               ),
                             ),
                           ]),
-                          const SizedBox(height: 16),
+                          SizedBox(height: gap(16)),
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
@@ -138,7 +168,7 @@ class HomeScreen extends StatelessWidget {
                               minHeight: 6,
                             ),
                           ),
-                          const SizedBox(height: 20),
+                          SizedBox(height: gap(20)),
                           NeonButton(
                             label: 'Continue Playing',
                             icon: Icons.play_arrow_rounded,
@@ -151,7 +181,7 @@ class HomeScreen extends StatelessWidget {
                         ],
                       ),
                     ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.2, delay: 200.ms),
-                    const SizedBox(height: 16),
+                    SizedBox(height: gap(16)),
 
                     // Stats row
                     Row(children: [
@@ -173,7 +203,7 @@ class HomeScreen extends StatelessWidget {
                         ),
                       ),
                     ]).animate().fadeIn(delay: 350.ms),
-                    const SizedBox(height: 16),
+                    SizedBox(height: gap(16)),
 
                     // All Worlds
                     GlassCard(
@@ -206,14 +236,14 @@ class HomeScreen extends StatelessWidget {
                             color: AppColors.white40),
                       ]),
                     ).animate().fadeIn(delay: 450.ms),
-                    const SizedBox(height: 16),
+                    SizedBox(height: gap(16)),
 
                     // Future Hope Competition Card
                     _CompetitionCard().animate().fadeIn(delay: 500.ms),
-                    const SizedBox(height: 16),
+                    SizedBox(height: gap(16)),
 
                     _DailyChallengeCard().animate().fadeIn(delay: 550.ms),
-                    const SizedBox(height: 40),
+                    SizedBox(height: gap(40)),
 
                     Center(
                       child: Text('by chAs',
@@ -223,11 +253,14 @@ class HomeScreen extends StatelessWidget {
                               color: AppColors.white40,
                               letterSpacing: 2)),
                     ),
-                    const SizedBox(height: 24),
-                  ],
-                ),
-              ),
-            ),
+                    SizedBox(height: gap(24)),
+                  ],                 // closes Column children
+                ),                   // closes Column
+              ),                     // closes SingleChildScrollView
+            ),                       // closes ConstrainedBox
+          ),                         // closes Center
+        ),                           // closes MediaQuery
+      ),                             // closes SafeArea
             // Streak milestone reward popup (topmost layer)
             if (game.pendingStreakReward != null)
               _StreakRewardPopup(reward: game.pendingStreakReward!),

@@ -280,11 +280,21 @@ class _GameBoard extends StatelessWidget {
       final maxTubeW = (availW - 32 - hGap * (cols - 1)) / cols;
       final maxTubeH = (availH - 16 - vGap * (rows - 1) - arrowH * rows) / rows;
 
-      double tubeW = maxTubeW.clamp(34.0, 88.0);
+      // Available space is the hard ceiling here. The upper bound (88/280)
+      // caps how large tubes get when there's plenty of room, so they don't
+      // look comically oversized on a tablet — but nothing is allowed to
+      // push size ABOVE what's actually available. The previous two-sided
+      // clamp(80, 280) could force tubeH UP to a minimum of 80 even when
+      // the real available height per row was smaller than that — on very
+      // cramped screens (split-screen multitasking, a folded foldable,
+      // unusual aspect ratios) that forced overflow rather than shrinking
+      // to fit. A verified-safe tube here is always slightly small rather
+      // than clipped off-screen.
+      double tubeW = maxTubeW.clamp(0.0, 88.0);
       double tubeH = tubeW * 3.2;
       if (tubeH > maxTubeH) {
-        tubeH = maxTubeH.clamp(80.0, 280.0);
-        tubeW = (tubeH / 3.2).clamp(26.0, 88.0);
+        tubeH = maxTubeH.clamp(0.0, 280.0);
+        tubeW = (tubeH / 3.2).clamp(0.0, 88.0);
       }
 
       final tubeWidgets = List.generate(count, (i) {
@@ -314,9 +324,10 @@ class _GameBoard extends StatelessWidget {
             ),
           ),
         ),
-        if (game.isPouring && game.currentPour != null)
-          _PourOverlay(
-            pour:       game.currentPour!,
+        if (game.activePours.isNotEmpty)
+          ...game.activePours.map((pour) => _PourOverlay(
+            key:        ValueKey('pour_${pour.id}'),
+            pour:       pour,
             tubeW:      tubeW,
             tubeH:      tubeH,
             cols:       cols,
@@ -326,7 +337,7 @@ class _GameBoard extends StatelessWidget {
             totalCount: count,
             availW:     availW,
             availH:     availH,
-          ),
+          )),
       ]);
     });
   }
@@ -341,6 +352,7 @@ class _PourOverlay extends StatefulWidget {
   final double availW, availH;
 
   const _PourOverlay({
+    super.key,
     required this.pour,
     required this.tubeW,
     required this.tubeH,
@@ -666,14 +678,17 @@ class _TubeWidgetState extends State<_TubeWidget>
   void didUpdateWidget(_TubeWidget old) {
     super.didUpdateWidget(old);
     final game = context.read<GameProvider>();
-    final pour = game.currentPour;
+    // A tube may be the source of an in-flight pour even while others are
+    // also animating elsewhere on the board — check membership, not a
+    // single global pour reference.
+    final isPourSrc = game.activePours.any((p) => p.fromIndex == widget.index);
 
     if (widget.tube.isSelected && !old.tube.isSelected) {
       _ctrl.forward();
     } else if (!widget.tube.isSelected && old.tube.isSelected) {
       _ctrl.reverse();
     }
-    if (pour != null && pour.fromIndex == widget.index) {
+    if (isPourSrc) {
       _ctrl.forward();
     } else if (old.tube.isSelected && !widget.tube.isSelected) {
       _ctrl.reverse();
@@ -688,9 +703,14 @@ class _TubeWidgetState extends State<_TubeWidget>
 
   @override
   Widget build(BuildContext context) {
-    final game        = context.read<GameProvider>();
-    final pour        = game.currentPour;
-    final isPourSrc   = pour != null && pour.fromIndex == widget.index;
+    final game = context.read<GameProvider>();
+    // Find this tube's own in-flight pour, if any — other tubes may have
+    // their own independent pours active at the same time.
+    PourEvent? myPour;
+    for (final p in game.activePours) {
+      if (p.fromIndex == widget.index) { myPour = p; break; }
+    }
+    final isPourSrc = myPour != null;
     final w = widget.tubeW;
     final h = widget.tubeH;
     final r = w / 2;
@@ -722,8 +742,8 @@ class _TubeWidgetState extends State<_TubeWidget>
 
     double tiltTarget = 0;
     if (isPourSrc) {
-      final toCol  = pour!.toIndex   % widget.cols;
-      final frmCol = widget.index    % widget.cols;
+      final toCol  = myPour!.toIndex  % widget.cols;
+      final frmCol = widget.index     % widget.cols;
       if      (toCol > frmCol) tiltTarget = -0.46;
       else if (toCol < frmCol) tiltTarget =  0.46;
       else                      tiltTarget = -0.28;

@@ -23,11 +23,13 @@ class StreakReward {
 }
 
 class PourEvent {
+  final int id;
   final int fromIndex;
   final int toIndex;
   final int color;
   final int count;
   PourEvent({
+    required this.id,
     required this.fromIndex,
     required this.toIndex,
     required this.color,
@@ -90,10 +92,21 @@ class GameProvider extends ChangeNotifier {
   int? get hintFrom   => _hintFromIndex;
   int? get hintTo     => _hintToIndex;
 
-  PourEvent? _currentPour;
-  PourEvent? get currentPour => _currentPour;
-  bool _isPouring = false;
-  bool get isPouring => _isPouring;
+  // Multiple pours can be visually in flight at once — each move commits to
+  // the data model instantly (see _executePour), so one tube's pour never
+  // blocks another tube from being tapped in the meantime. This list is
+  // purely cosmetic: it only drives which stream/splash overlays render.
+  final List<PourEvent> _activePours = [];
+  List<PourEvent> get activePours => List.unmodifiable(_activePours);
+  bool get isPouring => _activePours.isNotEmpty;
+  int _pourIdCounter = 0;
+
+  // Bumped by undo() and level loads. Each pour's deferred win/game-over
+  // check captures this value when scheduled; if it no longer matches when
+  // the callback fires, the outcome is stale (e.g. the move was undone
+  // before its animation finished) and is safely discarded instead of
+  // wrongly flipping the game to won/gameOver after the fact.
+  int _undoGeneration = 0;
 
   // ── Competition timing & color count ──────────────────────────────────────
   DateTime? _levelStartTime;
@@ -150,8 +163,8 @@ class GameProvider extends ChangeNotifier {
     _isHinting      = false;
     _hintFromIndex  = null;
     _hintToIndex    = null;
-    _currentPour    = null;
-    _isPouring      = false;
+    _activePours.clear();
+    _undoGeneration++;
     _undoStack.clear();
     _levelStartTime = DateTime.now(); // competition timer starts here
     notifyListeners();
@@ -187,7 +200,11 @@ class GameProvider extends ChangeNotifier {
   // ── Tube selection & pour ───────────────────────────────────────────────────
   void selectTube(int index) {
     if (_status != GameStatus.playing) return;
-    if (_isPouring) return;
+    // Once moves are exhausted, stop accepting new pours right away — even
+    // though the game-over overlay itself is deferred until the triggering
+    // pour's animation finishes (see _executePour), input stops immediately
+    // so the player can't sneak in bonus moves during that visual buffer.
+    if (isOutOfMoves) return;
     if (index < 0 || index >= _tubes.length) return;
 
     _audio.playTap().catchError((_) {});
@@ -213,7 +230,7 @@ class GameProvider extends ChangeNotifier {
     final to   = _tubes[index];
 
     if (to.canReceive(from)) {
-      _initiatePour(_selectedIndex!, index);
+      _executePour(_selectedIndex!, index);
     } else {
       _audio.playError().catchError((_) {});
       _tryHaptic(HapticFeedback.heavyImpact);
@@ -229,29 +246,30 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
-  void _initiatePour(int fromIdx, int toIdx) {
-    final from      = _tubes[fromIdx];
+  // ── Pour execution ───────────────────────────────────────────────────────────
+  // Data mutates INSTANTLY here — the move, undo snapshot, and win/game-over
+  // outcome are all decided synchronously the moment a move is validated.
+  // The 700ms that follows is a purely cosmetic stream+splash animation
+  // with zero effect on game state, tracked in _activePours. This is what
+  // lets one tube's pour animate without freezing input on the rest of the
+  // board — previously a single _isPouring flag blocked every tube until
+  // each pour's animation had fully finished playing.
+  void _executePour(int fromIdx, int toIdx) {
+    if (fromIdx == toIdx) return;
+    if (fromIdx < 0 || fromIdx >= _tubes.length) return;
+    if (toIdx   < 0 || toIdx   >= _tubes.length) return;
+    if (isOutOfMoves) return;
+
+    final from = _tubes[fromIdx];
+    final to   = _tubes[toIdx];
+    if (!to.canReceive(from)) return; // stale/invalid move — safe no-op
+
     final topColor  = from.topColor!;
     final topCount  = from.topColorCount;
-    final canFit    = _tubes[toIdx].capacity - _tubes[toIdx].colors.length;
+    final canFit    = to.capacity - to.colors.length;
     final moveCount = min(topCount, canFit);
 
-    _currentPour = PourEvent(
-      fromIndex: fromIdx,
-      toIndex:   toIdx,
-      color:     topColor,
-      count:     moveCount,
-    );
-    _isPouring = true;
-    notifyListeners();
-
-    Future.delayed(const Duration(milliseconds: 700), () {
-      _commitPour(fromIdx, toIdx, moveCount, topColor);
-    });
-  }
-
-  void _commitPour(int fromIdx, int toIdx, int moveCount, int topColor) {
-    // Save undo snapshot
+    // Undo snapshot — captured BEFORE mutating, same as before.
     _undoStack.add(_tubes
         .map((t) => t.copyWith(
             colors: List<int>.from(t.colors), isSelected: false))
@@ -265,18 +283,14 @@ class GameProvider extends ChangeNotifier {
       newTo.add(topColor);
     }
 
-    final newToTube = TubeModel(
-        colors: newTo, capacity: _tubes[toIdx].capacity);
-    _tubes[fromIdx] =
-        _tubes[fromIdx].copyWith(colors: newFrom, isSelected: false);
-    _tubes[toIdx] = newToTube.isPerfect
+    final newToTube = TubeModel(colors: newTo, capacity: _tubes[toIdx].capacity);
+    _tubes[fromIdx] = _tubes[fromIdx].copyWith(colors: newFrom, isSelected: false);
+    _tubes[toIdx]   = newToTube.isPerfect
         ? newToTube.copyWith(isCompleted: true)
         : newToTube;
 
     _selectedIndex = null;
     _moves++;
-    _currentPour = null;
-    _isPouring   = false;
 
     _audio.playPour().catchError((_) {});
     _tryHaptic(HapticFeedback.lightImpact);
@@ -284,28 +298,49 @@ class GameProvider extends ChangeNotifier {
       _audio.playChime().catchError((_) {});
     }
 
-    _checkWin();
+    // Register a purely-visual pour — the UI animates it independently and
+    // it self-removes below. No game logic depends on it any further.
+    final id  = _pourIdCounter++;
+    final gen = _undoGeneration;
+    _activePours.add(PourEvent(
+      id: id, fromIndex: fromIdx, toIndex: toIdx, color: topColor, count: moveCount,
+    ));
 
-    // Out of moves and not yet won → game over
-    if (_status == GameStatus.playing && isOutOfMoves) {
-      _status = GameStatus.gameOver;
-      _audio.playError().catchError((_) {});
-      _tryHaptic(HapticFeedback.heavyImpact);
-    }
+    // Outcome is already final — data won't change between now and when the
+    // animation finishes, so it's safe to decide it here and just delay
+    // *showing* it until the visual catches up with what already happened.
+    final justWon  = _isBoardSolved();
+    final justLost = !justWon && isOutOfMoves;
 
     notifyListeners();
+
+    Future.delayed(const Duration(milliseconds: 700), () {
+      _activePours.removeWhere((p) => p.id == id);
+
+      // gen guards against a stale outcome: if undo() (or a new level load)
+      // ran in the meantime, this pour's result no longer applies.
+      // The `playing` guard means whichever pour's timer fires first
+      // (always the earliest-started one, since every pour runs the same
+      // fixed duration) performs the transition once; later ones no-op.
+      if (_status == GameStatus.playing && gen == _undoGeneration) {
+        if (justWon) {
+          _status = GameStatus.won;
+          _totalLevelsCompleted++;
+          _stars = _calculateStars();
+          _audio.playWin().catchError((_) {});
+          _tryHaptic(HapticFeedback.heavyImpact);
+          _saveProgress();
+        } else if (justLost) {
+          _status = GameStatus.gameOver;
+          _audio.playError().catchError((_) {});
+          _tryHaptic(HapticFeedback.heavyImpact);
+        }
+      }
+      notifyListeners();
+    });
   }
 
-  void _checkWin() {
-    final allDone = _tubes.every((t) => t.isEmpty || t.isPerfect);
-    if (!allDone) return;
-    _status = GameStatus.won;
-    _totalLevelsCompleted++;
-    _stars = _calculateStars();
-    _audio.playWin().catchError((_) {});
-    _tryHaptic(HapticFeedback.heavyImpact);
-    _saveProgress();
-  }
+  bool _isBoardSolved() => _tubes.every((t) => t.isEmpty || t.isPerfect);
 
   int _calculateStars() {
     final optimal = currentColorCount * 4;
@@ -327,8 +362,8 @@ class GameProvider extends ChangeNotifier {
     _selectedIndex = null;
     _moves         = max(0, _moves - 1);
     _status        = GameStatus.playing;
-    _isPouring     = false;
-    _currentPour   = null;
+    _activePours.clear();
+    _undoGeneration++; // invalidate any pending pour outcome from before this undo
     _audio.playClick().catchError((_) {});
     _tryHaptic(HapticFeedback.selectionClick);
     notifyListeners();
@@ -342,7 +377,7 @@ class GameProvider extends ChangeNotifier {
   void useHint() {
     if (_status != GameStatus.playing) return;
     if (_hints <= 0)   return;
-    if (_isPouring)    return;
+    if (isOutOfMoves)  return;
 
     final move = _findBestMove();
     if (move == null) return;
@@ -354,7 +389,11 @@ class GameProvider extends ChangeNotifier {
     _audio.playClick().catchError((_) {});
     notifyListeners();
 
-    // Brief highlight then auto-execute
+    // Brief highlight then auto-execute. _executePour re-validates the move
+    // itself (via canReceive) before touching anything, so if the board
+    // changed in the meantime — the player made a manual move during this
+    // highlight window — a now-stale hint safely no-ops instead of
+    // corrupting state.
     Future.delayed(const Duration(milliseconds: 600), () {
       if (!_isHinting) return;
       _isHinting     = false;
@@ -366,7 +405,7 @@ class GameProvider extends ChangeNotifier {
         }
       }
       _selectedIndex = null;
-      _initiatePour(move[0], move[1]);
+      _executePour(move[0], move[1]);
     });
   }
 
