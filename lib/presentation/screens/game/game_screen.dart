@@ -66,6 +66,13 @@ class _GameScreenState extends State<GameScreen> {
             _GameHeader(worldColor: worldColor, worldName: world['name'] as String),
             Expanded(
               child: Stack(children: [
+                // Ambient glow sits behind everything — seeded per level so
+                // each one looks a little different, colored to the current
+                // world so it stays visually coherent.
+                _LevelAmbientGlow(
+                  levelSeed:    game.currentLevelId,
+                  primaryColor: worldColor,
+                ),
                 if (game.status == GameStatus.won)
                   _WinOverlay()
                 else if (game.status == GameStatus.gameOver)
@@ -89,6 +96,132 @@ class _GameScreenState extends State<GameScreen> {
 }
 
 // ── HEADER ──────────────────────────────────────────────────────────────────────
+// ── LEVEL AMBIENT GLOW ────────────────────────────────────────────────────────
+// A small number of soft, slowly-drifting glow orbs colored to the current
+// world, with per-level variation in position/motion/timing so every level
+// looks a little different from its neighbors even within the same world —
+// while staying visually coherent (same color family) since the palette is
+// still tied to the world, not randomized per level.
+//
+// Kept deliberately cheap, the same way the home screen's ambient orbs are:
+// ONE shared AnimationController drives all orbs (not one controller each —
+// that pattern caused real ticker pile-ups earlier on the splash screen and
+// competition leaderboard). Rendering is plain Container + RadialGradient,
+// not a CustomPainter — no per-pixel work, no blur filters. Wrapped in
+// RepaintBoundary so this continuous animation never forces the tube board
+// above it to repaint, and IgnorePointer so it can never intercept a tap
+// meant for a tube.
+class _LevelAmbientGlow extends StatefulWidget {
+  final int   levelSeed;
+  final Color primaryColor;
+  const _LevelAmbientGlow({required this.levelSeed, required this.primaryColor});
+
+  @override
+  State<_LevelAmbientGlow> createState() => _LevelAmbientGlowState();
+}
+
+class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late List<_GlowOrbSpec> _orbs;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 14),
+    )..repeat();
+    _buildOrbs();
+  }
+
+  @override
+  void didUpdateWidget(_LevelAmbientGlow old) {
+    super.didUpdateWidget(old);
+    // New level → regenerate the orb layout so each level looks different.
+    if (old.levelSeed != widget.levelSeed) {
+      setState(_buildOrbs);
+    }
+  }
+
+  void _buildOrbs() {
+    final rng = Random(widget.levelSeed * 7919 + 13);
+    _orbs = List.generate(4, (i) {
+      return _GlowOrbSpec(
+        baseX:   rng.nextDouble(),
+        baseY:   rng.nextDouble(),
+        radius:  90 + rng.nextDouble() * 90,
+        phase:   rng.nextDouble(),
+        driftX:  0.08 + rng.nextDouble() * 0.10,
+        driftY:  0.08 + rng.nextDouble() * 0.10,
+        opacity: 0.10 + rng.nextDouble() * 0.10,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _ctrl,
+          builder: (_, __) {
+            final t = _ctrl.value;
+            return Stack(
+              children: _orbs.map((o) {
+                final angle = (t + o.phase) * 2 * pi;
+                final x = o.baseX * size.width +
+                    sin(angle) * o.driftX * size.width;
+                final y = o.baseY * size.height +
+                    cos(angle * 0.8) * o.driftY * size.height;
+                final pulse = 0.75 + 0.25 * sin((t + o.phase) * 2 * pi * 1.3);
+
+                return Positioned(
+                  left: x - o.radius,
+                  top:  y - o.radius,
+                  child: Container(
+                    width:  o.radius * 2,
+                    height: o.radius * 2,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          widget.primaryColor.withOpacity(o.opacity * pulse),
+                          widget.primaryColor.withOpacity(0),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _GlowOrbSpec {
+  final double baseX, baseY, radius, phase, driftX, driftY, opacity;
+  _GlowOrbSpec({
+    required this.baseX,
+    required this.baseY,
+    required this.radius,
+    required this.phase,
+    required this.driftX,
+    required this.driftY,
+    required this.opacity,
+  });
+}
+
 class _GameHeader extends StatelessWidget {
   final Color  worldColor;
   final String worldName;
@@ -298,16 +431,18 @@ class _GameBoard extends StatelessWidget {
       }
 
       final tubeWidgets = List.generate(count, (i) {
-        return _TubeWidget(
+        return RepaintBoundary(
           key: ValueKey('tube_$i'),
-          tube:       tubes[i],
-          index:      i,
-          isHintFrom: game.isHinting && game.hintFrom == i,
-          isHintTo:   game.isHinting && game.hintTo   == i,
-          tubeW:      tubeW,
-          tubeH:      tubeH,
-          cols:       cols,
-          totalCount: count,
+          child: _TubeWidget(
+            tube:       tubes[i],
+            index:      i,
+            isHintFrom: game.isHinting && game.hintFrom == i,
+            isHintTo:   game.isHinting && game.hintTo   == i,
+            tubeW:      tubeW,
+            tubeH:      tubeH,
+            cols:       cols,
+            totalCount: count,
+          ),
         );
       });
 
@@ -325,18 +460,30 @@ class _GameBoard extends StatelessWidget {
           ),
         ),
         if (game.activePours.isNotEmpty)
-          ...game.activePours.map((pour) => _PourOverlay(
-            key:        ValueKey('pour_${pour.id}'),
-            pour:       pour,
-            tubeW:      tubeW,
-            tubeH:      tubeH,
-            cols:       cols,
-            hGap:       hGap,
-            vGap:       vGap,
-            arrowH:     arrowH,
-            totalCount: count,
-            availW:     availW,
-            availH:     availH,
+          ...game.activePours.map((pour) => IgnorePointer(
+            key: ValueKey('pour_${pour.id}'),
+            // IgnorePointer guarantees this purely-decorative layer can
+            // never intercept a tap meant for a tube underneath it —
+            // applied defensively here regardless of Flutter's exact
+            // default hit-test behavior for CustomPaint, since taps must
+            // always reach the board no matter how many pours are active.
+            // RepaintBoundary isolates each concurrent pour's own repaints
+            // from the others and from the tube board — important now
+            // that several pours can legitimately be animating at once.
+            child: RepaintBoundary(
+              child: _PourOverlay(
+                pour:       pour,
+                tubeW:      tubeW,
+                tubeH:      tubeH,
+                cols:       cols,
+                hGap:       hGap,
+                vGap:       vGap,
+                arrowH:     arrowH,
+                totalCount: count,
+                availW:     availW,
+                availH:     availH,
+              ),
+            ),
           )),
       ]);
     });
@@ -526,7 +673,11 @@ class _PourPainter extends CustomPainter {
     final baseW = (5.5 * (1 - progress * 0.38)).clamp(1.8, 6.0);
 
     // Stream — 18 segments (was 28, same visual quality)
-    const segs = 18;
+    // Segment count reduced from the original single-pour tuning (was 18)
+    // — with concurrent pours now a core feature, several of these can be
+    // painting on the same frame, so per-instance cost matters more than
+    // it used to. Still visually smooth at 12.
+    const segs = 12;
     final paint = Paint()
       ..strokeCap = StrokeCap.round
       ..style     = PaintingStyle.stroke;
@@ -582,9 +733,9 @@ class _PourPainter extends CustomPainter {
             ..style       = PaintingStyle.stroke,
         );
       }
-      // Splash fan drops — 8 rays
-      for (int s = 0; s < 8; s++) {
-        final angle = (s / 8.0) * 2 * pi + sp * 0.8;
+      // Splash fan drops — 6 rays (was 8; trimmed for concurrent-pour cost)
+      for (int s = 0; s < 6; s++) {
+        final angle = (s / 6.0) * 2 * pi + sp * 0.8;
         final dist  = tubeW * 0.25 * sp;
         canvas.drawCircle(
           dest + Offset(cos(angle) * dist, sin(angle) * dist * 0.55),
@@ -592,12 +743,14 @@ class _PourPainter extends CustomPainter {
           Paint()..color = color.withOpacity(sa * 0.7),
         );
       }
-      // Inner glow
+      // Inner glow — a plain, unblurred translucent circle. The previous
+      // version used MaskFilter.blur here, which is a genuinely expensive
+      // GPU operation compared to everything else this painter does; with
+      // several pours now able to run at once, that cost multiplies per
+      // concurrent instance. This keeps the same soft-glow read without it.
       canvas.drawCircle(
         dest, tubeW * 0.32,
-        Paint()
-          ..color      = color.withOpacity(0.13 * (1 - sp) * fadeAlpha)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+        Paint()..color = color.withOpacity(0.10 * (1 - sp) * fadeAlpha),
       );
     }
 

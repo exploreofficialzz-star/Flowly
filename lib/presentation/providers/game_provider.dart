@@ -70,6 +70,8 @@ class GameProvider extends ChangeNotifier {
   int _currentWorldIndex = 0;
   int get currentWorldIndex => _currentWorldIndex;
 
+  int get currentLevelId => _currentLevelId;
+
   int _currentLevelInWorld = 0;
   int get currentLevelInWorld => _currentLevelInWorld;
 
