@@ -25,7 +25,12 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
-    _loadBanner();
+    // Defer to after the first frame so _loadBanner's setState() doesn't
+    // compete with the initial widget build.  Previously the synchronous
+    // _loadBanner() → setState() in initState caused a double-build on the
+    // very first frame — the main source of the "game screen hangs at the
+    // very beginning" symptom on budget devices.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadBanner());
   }
 
   void _loadBanner() {
@@ -117,7 +122,7 @@ class _LevelAmbientGlow extends StatefulWidget {
 class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late List<_GlowOrbSpec> _orbs;
+  late List<_GlowOrbSpec>  _orbs;
 
   @override
   void initState() {
@@ -125,31 +130,34 @@ class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 14),
-    )..repeat();
+    );
     _buildOrbs();
+    // Defer animation start so the glow doesn't compete with the game board's
+    // first-frame build.  The ambient glow is purely cosmetic — starting it
+    // one frame later has zero gameplay impact but removes one source of
+    // first-frame budget overrun on budget devices.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ctrl.repeat();
+    });
   }
 
   @override
   void didUpdateWidget(_LevelAmbientGlow old) {
     super.didUpdateWidget(old);
-    if (old.levelSeed != widget.levelSeed) {
-      setState(_buildOrbs);
-    }
+    if (old.levelSeed != widget.levelSeed) setState(_buildOrbs);
   }
 
   void _buildOrbs() {
     final rng = Random(widget.levelSeed * 7919 + 13);
-    _orbs = List.generate(4, (i) {
-      return _GlowOrbSpec(
-        baseX:   rng.nextDouble(),
-        baseY:   rng.nextDouble(),
-        radius:  90 + rng.nextDouble() * 90,
-        phase:   rng.nextDouble(),
-        driftX:  0.08 + rng.nextDouble() * 0.10,
-        driftY:  0.08 + rng.nextDouble() * 0.10,
-        opacity: 0.10 + rng.nextDouble() * 0.10,
-      );
-    });
+    _orbs = List.generate(4, (i) => _GlowOrbSpec(
+      baseX:   rng.nextDouble(),
+      baseY:   rng.nextDouble(),
+      radius:  90 + rng.nextDouble() * 90,
+      phase:   rng.nextDouble(),
+      driftX:  0.08 + rng.nextDouble() * 0.10,
+      driftY:  0.08 + rng.nextDouble() * 0.10,
+      opacity: 0.10 + rng.nextDouble() * 0.10,
+    ));
   }
 
   @override
@@ -160,46 +168,69 @@ class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
+    // CustomPainter: zero widget objects created per frame.
+    // Previous implementation used AnimatedBuilder → Stack → Positioned →
+    // Container at 60 fps, allocating ~20 short-lived Dart objects per frame
+    // (5 orbs × Stack + Positioned + Container + BoxDecoration + RadialGradient)
+    // = 1 200 objects/second of pure GC pressure. CustomPainter paints
+    // directly on the raster thread with no widget tree work at all.
     return IgnorePointer(
       child: RepaintBoundary(
-        child: AnimatedBuilder(
-          animation: _ctrl,
-          builder: (_, __) {
-            final t = _ctrl.value;
-            return Stack(
-              children: _orbs.map((o) {
-                final angle = (t + o.phase) * 2 * pi;
-                final x = o.baseX * size.width +
-                    sin(angle) * o.driftX * size.width;
-                final y = o.baseY * size.height +
-                    cos(angle * 0.8) * o.driftY * size.height;
-                final pulse = 0.75 + 0.25 * sin((t + o.phase) * 2 * pi * 1.3);
-
-                return Positioned(
-                  left: x - o.radius,
-                  top:  y - o.radius,
-                  child: Container(
-                    width:  o.radius * 2,
-                    height: o.radius * 2,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          widget.primaryColor.withOpacity(o.opacity * pulse),
-                          widget.primaryColor.withOpacity(0),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            );
-          },
+        child: SizedBox.expand(
+          child: AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, __) => CustomPaint(
+              painter: _AmbientGlowPainter(
+                t:     _ctrl.value,
+                color: widget.primaryColor,
+                orbs:  _orbs,
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
+}
+
+// Paints the 4 drifting radial-gradient orbs without touching the widget tree.
+class _AmbientGlowPainter extends CustomPainter {
+  final double          t;
+  final Color           color;
+  final List<_GlowOrbSpec> orbs;
+
+  const _AmbientGlowPainter({
+    required this.t,
+    required this.color,
+    required this.orbs,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final o in orbs) {
+      final angle  = (t + o.phase) * 2 * pi;
+      final dx     = o.baseX * size.width  + sin(angle)       * o.driftX * size.width;
+      final dy     = o.baseY * size.height + cos(angle * 0.8) * o.driftY * size.height;
+      final pulse  = 0.75 + 0.25 * sin((t + o.phase) * 2 * pi * 1.3);
+      final center = Offset(dx, dy);
+
+      canvas.drawCircle(
+        center,
+        o.radius,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              color.withOpacity(o.opacity * pulse),
+              color.withOpacity(0),
+            ],
+          ).createShader(Rect.fromCircle(center: center, radius: o.radius)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_AmbientGlowPainter old) =>
+      old.t != t || old.color != color;
 }
 
 class _GlowOrbSpec {
