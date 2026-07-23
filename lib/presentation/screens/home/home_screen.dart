@@ -19,17 +19,35 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final game  = context.watch<GameProvider>();
-    final world = AppConstants.worlds[game.currentWorldIndex];
+    // ── Scoped select: only rebuild HomeScreen when one of these specific
+    // values changes.  Previously context.watch<GameProvider>() caused a full
+    // HomeScreen rebuild on EVERY tube tap, pour animation, undo, and hint
+    // use — even while HomeScreen was invisible underneath GameScreen in the
+    // nav stack.  With context.select and a Dart record, the equality check
+    // is structural (all fields compared by value), so rebuilds only happen
+    // when something the home screen actually displays has changed.
+    final gs = context.select<GameProvider,
+        ({
+          int worldIdx,
+          int levelInWorld,
+          int total,
+          int streak,
+          int hints,
+          bool isEndless,
+          StreakReward? reward,
+        })>((g) => (
+              worldIdx:    g.currentWorldIndex.clamp(0, AppConstants.worlds.length - 1),
+              levelInWorld: g.currentLevelInWorld,
+              total:       g.totalLevelsCompleted,
+              streak:      g.dailyStreak,
+              hints:       g.hints,
+              isEndless:   g.isEndlessLevel,
+              reward:      g.pendingStreakReward,
+            ));
 
-    // Adaptive scale: shrinks spacing/text proportionally on short screens
-    // so more content fits without scrolling. Reference height (844) is a
-    // standard mid-size phone; floor of 0.82 keeps text legible on the
-    // smallest real devices; capped at 1.0 so this never grows content
-    // oversized on taller phones (large screens are handled separately
-    // below via a max-width cap instead of stretching everything bigger).
-    final screenH = MediaQuery.sizeOf(context).height;
-    final scale   = (screenH / 844).clamp(0.82, 1.0);
+    final world      = AppConstants.worlds[gs.worldIdx];
+    final screenH    = MediaQuery.sizeOf(context).height;
+    final scale      = (screenH / 844).clamp(0.82, 1.0);
     double gap(double v) => v * scale;
 
     return Scaffold(
@@ -38,22 +56,9 @@ class HomeScreen extends StatelessWidget {
         decoration: const BoxDecoration(gradient: AppColors.gradientBg),
         child: Stack(
           children: [
-            // Isolated in its own compositing layer so its continuous
-            // 6-second ticker never forces a repaint of the sibling
-            // scroll content (and vice versa) — the two were sharing a
-            // layer, so scrolling and the orb animation were competing
-            // for the same repaint pass every frame.
             RepaintBoundary(child: _BgOrbs()),
             SafeArea(
               child: MediaQuery(
-                // Scales all text in this subtree by the same factor as the
-                // spacing gaps below, so short screens shrink proportionally
-                // as one coherent layout rather than just getting tighter
-                // gaps between still full-size text/cards. The device's own
-                // scale is sampled via scale(100)/100 (works whether the
-                // platform scaler is linear or not) so this compounds with,
-                // rather than overrides, the user's accessibility text-size
-                // setting.
                 data: MediaQuery.of(context).copyWith(
                   textScaler: TextScaler.linear(
                     (MediaQuery.textScalerOf(context).scale(100) / 100) * scale,
@@ -61,209 +66,205 @@ class HomeScreen extends StatelessWidget {
                 ),
                 child: Center(
                   child: ConstrainedBox(
-                    // Caps content width on tablets/large screens so it
-                    // doesn't stretch edge-to-edge; on phones this is a
-                    // no-op since 480 exceeds typical phone widths.
                     constraints: const BoxConstraints(maxWidth: 480),
                     child: SingleChildScrollView(
                       padding: EdgeInsets.symmetric(horizontal: gap(24)),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox(height: gap(16)),                    // Top row
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ShaderMask(
-                              shaderCallback: (r) =>
-                                  AppColors.gradientPrimary.createShader(r),
-                              child: const Text('Flowly',
-                                  style: TextStyle(
-                                      fontSize: 32,
-                                      fontWeight: FontWeight.w800,
-                                      fontFamily: 'Poppins',
-                                      color: Colors.white)),
-                            ),
-                            Text('by chAs',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontFamily: 'Poppins',
-                                    color: AppColors.white40,
-                                    letterSpacing: 1.5)),
-                          ],
-                        ),
-                        GlassCard(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 10),
-                          child: Row(children: [
-                            const Text('🔥',
-                                style: TextStyle(fontSize: 18)),
-                            const SizedBox(width: 6),
-                            Text('${game.dailyStreak}',
-                                style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    fontFamily: 'Poppins',
-                                    color: AppColors.neonOrange)),
-                          ]),
-                        ),
-                      ],
-                    ).animate().fadeIn(duration: 500.ms),
-                    SizedBox(height: gap(24)),
-
-                    // Remove Ads banner
-                    const RemoveAdsBanner()
-                        .animate()
-                        .fadeIn(delay: 150.ms),
-                    SizedBox(height: gap(16)),
-
-                    // Current world card
-                    GlassCard(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(children: [
-                            Text(world['emoji'] as String,
-                                style: const TextStyle(fontSize: 32)),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
+                          SizedBox(height: gap(16)),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(world['name'] as String,
-                                      style: const TextStyle(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w700,
-                                          fontFamily: 'Poppins',
-                                          color: AppColors.white)),
-                                  Text(
-                                    game.isEndlessLevel
-                                        ? 'Level ${game.currentLevelInWorld + 1} · infinite'
-                                        : 'Level ${game.currentLevelInWorld + 1}'
-                                          ' of ${AppConstants.levelsPerWorld}',
-                                    style: TextStyle(
-                                        fontSize: 13,
-                                        fontFamily: 'Poppins',
-                                        color: AppColors.white40),
+                                  ShaderMask(
+                                    shaderCallback: (r) =>
+                                        AppColors.gradientPrimary.createShader(r),
+                                    child: const Text('Flowly',
+                                        style: TextStyle(
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.w800,
+                                            fontFamily: 'Poppins',
+                                            color: Colors.white)),
                                   ),
+                                  Text('by chAs',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          fontFamily: 'Poppins',
+                                          color: AppColors.white40,
+                                          letterSpacing: 1.5)),
                                 ],
                               ),
-                            ),
-                          ]),
+                              GlassCard(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                child: Row(children: [
+                                  const Text('🔥',
+                                      style: TextStyle(fontSize: 18)),
+                                  const SizedBox(width: 6),
+                                  Text('${gs.streak}',
+                                      style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w700,
+                                          fontFamily: 'Poppins',
+                                          color: AppColors.neonOrange)),
+                                ]),
+                              ),
+                            ],
+                          ).animate().fadeIn(duration: 500.ms),
+                          SizedBox(height: gap(24)),
+
+                          const RemoveAdsBanner()
+                              .animate()
+                              .fadeIn(delay: 150.ms),
                           SizedBox(height: gap(16)),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
-                              value: game.isEndlessLevel
-                                  ? 1.0
-                                  : (game.currentLevelInWorld + 1) /
-                                      AppConstants.levelsPerWorld,
-                              backgroundColor: AppColors.white10,
-                              valueColor: AlwaysStoppedAnimation(
-                                  Color(world['primaryColor'] as int)),
-                              minHeight: 6,
+
+                          // Current world card
+                          GlassCard(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Text(world['emoji'] as String,
+                                      style: const TextStyle(fontSize: 32)),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(world['name'] as String,
+                                            style: const TextStyle(
+                                                fontSize: 20,
+                                                fontWeight: FontWeight.w700,
+                                                fontFamily: 'Poppins',
+                                                color: AppColors.white)),
+                                        Text(
+                                          gs.isEndless
+                                              ? 'Level ${gs.levelInWorld + 1} · infinite'
+                                              : 'Level ${gs.levelInWorld + 1}'
+                                                ' of ${AppConstants.levelsPerWorld}',
+                                          style: TextStyle(
+                                              fontSize: 13,
+                                              fontFamily: 'Poppins',
+                                              color: AppColors.white40),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ]),
+                                SizedBox(height: gap(16)),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: gs.isEndless
+                                        ? 1.0
+                                        : (gs.levelInWorld + 1) /
+                                            AppConstants.levelsPerWorld,
+                                    backgroundColor: AppColors.white10,
+                                    valueColor: AlwaysStoppedAnimation(
+                                        Color(world['primaryColor'] as int)),
+                                    minHeight: 6,
+                                  ),
+                                ),
+                                SizedBox(height: gap(20)),
+                                NeonButton(
+                                  label: 'Continue Playing',
+                                  icon: Icons.play_arrow_rounded,
+                                  onTap: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) => const GameScreen()),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                          SizedBox(height: gap(20)),
-                          NeonButton(
-                            label: 'Continue Playing',
-                            icon: Icons.play_arrow_rounded,
+                          ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.2, delay: 200.ms),
+                          SizedBox(height: gap(16)),
+
+                          // Stats row
+                          Row(children: [
+                            Expanded(
+                              child: _StatCard(
+                                label: 'Completed',
+                                value: '${gs.total}',
+                                icon: Icons.check_circle_outline,
+                                color: AppColors.neonGreen,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _StatCard(
+                                label: 'Hints Left',
+                                value: '${gs.hints}',
+                                icon: Icons.lightbulb_outline,
+                                color: AppColors.neonYellow,
+                              ),
+                            ),
+                          ]).animate().fadeIn(delay: 350.ms),
+                          SizedBox(height: gap(16)),
+
+                          // All Worlds
+                          GlassCard(
                             onTap: () => Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const GameScreen()),
+                                  builder: (_) => const WorldsScreen()),
                             ),
+                            padding: const EdgeInsets.all(20),
+                            child: Row(children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: AppColors.gradientPrimary,
+                                ),
+                                child: const Icon(Icons.public_rounded,
+                                    color: Colors.white, size: 22),
+                              ),
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Text('All Worlds',
+                                    style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'Poppins',
+                                        color: AppColors.white)),
+                              ),
+                              const Icon(Icons.chevron_right_rounded,
+                                  color: AppColors.white40),
+                            ]),
+                          ).animate().fadeIn(delay: 450.ms),
+                          SizedBox(height: gap(16)),
+
+                          // Future Hope Competition Card
+                          _CompetitionCard().animate().fadeIn(delay: 500.ms),
+                          SizedBox(height: gap(16)),
+
+                          _DailyChallengeCard().animate().fadeIn(delay: 550.ms),
+                          SizedBox(height: gap(40)),
+
+                          Center(
+                            child: Text('by chAs',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'Poppins',
+                                    color: AppColors.white40,
+                                    letterSpacing: 2)),
                           ),
+                          SizedBox(height: gap(24)),
                         ],
                       ),
-                    ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.2, delay: 200.ms),
-                    SizedBox(height: gap(16)),
-
-                    // Stats row
-                    Row(children: [
-                      Expanded(
-                        child: _StatCard(
-                          label: 'Completed',
-                          value: '${game.totalLevelsCompleted}',
-                          icon: Icons.check_circle_outline,
-                          color: AppColors.neonGreen,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _StatCard(
-                          label: 'Hints Left',
-                          value: '${game.hints}',
-                          icon: Icons.lightbulb_outline,
-                          color: AppColors.neonYellow,
-                        ),
-                      ),
-                    ]).animate().fadeIn(delay: 350.ms),
-                    SizedBox(height: gap(16)),
-
-                    // All Worlds
-                    GlassCard(
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const WorldsScreen()),
-                      ),
-                      padding: const EdgeInsets.all(20),
-                      child: Row(children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: AppColors.gradientPrimary,
-                          ),
-                          child: const Icon(Icons.public_rounded,
-                              color: Colors.white, size: 22),
-                        ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Text('All Worlds',
-                              style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w600,
-                                  fontFamily: 'Poppins',
-                                  color: AppColors.white)),
-                        ),
-                        const Icon(Icons.chevron_right_rounded,
-                            color: AppColors.white40),
-                      ]),
-                    ).animate().fadeIn(delay: 450.ms),
-                    SizedBox(height: gap(16)),
-
-                    // Future Hope Competition Card
-                    _CompetitionCard().animate().fadeIn(delay: 500.ms),
-                    SizedBox(height: gap(16)),
-
-                    _DailyChallengeCard().animate().fadeIn(delay: 550.ms),
-                    SizedBox(height: gap(40)),
-
-                    Center(
-                      child: Text('by chAs',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontFamily: 'Poppins',
-                              color: AppColors.white40,
-                              letterSpacing: 2)),
                     ),
-                    SizedBox(height: gap(24)),
-                  ],                 // closes Column children
-                ),                   // closes Column
-              ),                     // closes SingleChildScrollView
-            ),                       // closes ConstrainedBox
-          ),                         // closes Center
-        ),                           // closes MediaQuery
-      ),                             // closes SafeArea
+                  ),
+                ),
+              ),
+            ),
             // Streak milestone reward popup (topmost layer)
-            if (game.pendingStreakReward != null)
-              _StreakRewardPopup(reward: game.pendingStreakReward!),
+            if (gs.reward != null)
+              _StreakRewardPopup(reward: gs.reward!),
           ],
         ),
       ),
@@ -317,7 +318,6 @@ class _CompetitionCard extends StatelessWidget {
           MaterialPageRoute(builder: (_) => const CompetitionScreen())),
       padding: const EdgeInsets.all(18),
       child: Row(children: [
-        // Icon
         Container(
           width: 42, height: 42,
           decoration: BoxDecoration(
@@ -331,8 +331,6 @@ class _CompetitionCard extends StatelessWidget {
               child: Text('🌍', style: TextStyle(fontSize: 20))),
         ),
         const SizedBox(width: 14),
-
-        // Text
         Expanded(child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -398,8 +396,7 @@ class _DailyChallengeCard extends StatelessWidget {
           ),
         ),
         Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
             gradient: AppColors.gradientPrimary,
             borderRadius: BorderRadius.circular(20),
@@ -490,7 +487,7 @@ class _StreakRewardPopup extends StatelessWidget {
 
     return Positioned.fill(
       child: GestureDetector(
-        onTap: () {}, // absorb taps behind the card
+        onTap: () {},
         child: Container(
           color: Colors.black.withOpacity(0.65),
           child: Center(
@@ -515,8 +512,6 @@ class _StreakRewardPopup extends StatelessWidget {
                         fontFamily: 'Poppins',
                         color: AppColors.white40)),
                 const SizedBox(height: 20),
-
-                // Reward chips
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -537,7 +532,6 @@ class _StreakRewardPopup extends StatelessWidget {
                   ],
                 ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.2),
                 const SizedBox(height: 24),
-
                 GestureDetector(
                   onTap: () => context.read<GameProvider>().clearStreakReward(),
                   child: Container(

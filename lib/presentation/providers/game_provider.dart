@@ -103,11 +103,21 @@ class GameProvider extends ChangeNotifier {
   bool get isPouring => _activePours.isNotEmpty;
   int _pourIdCounter = 0;
 
+  // ── Board state version ───────────────────────────────────────────────────
+  // Incremented only when board-visible state changes: tubes, activePours,
+  // isHinting, hintFrom/To, selectedIndex.  Widgets that only care about
+  // the board (e.g. _GameBoard) use context.select on this int so they
+  // rebuild only when the board actually changes, not on every
+  // hints/moves/undo-count update.  Meta-state changes (hints count,
+  // maxMoves, undo stack size) intentionally do NOT increment this, so
+  // _GameControls and _GameHeader can similarly scope their rebuilds via
+  // context.select on their own specific fields.
+  int _boardStateVersion = 0;
+  int get boardStateVersion => _boardStateVersion;
+
   // Bumped by undo() and level loads. Each pour's deferred win/game-over
   // check captures this value when scheduled; if it no longer matches when
-  // the callback fires, the outcome is stale (e.g. the move was undone
-  // before its animation finished) and is safely discarded instead of
-  // wrongly flipping the game to won/gameOver after the fact.
+  // the callback fires, the outcome is stale and is safely discarded.
   int _undoGeneration = 0;
 
   // ── Competition timing & color count ──────────────────────────────────────
@@ -136,19 +146,16 @@ class GameProvider extends ChangeNotifier {
       _totalLevelsCompleted =
           prefs.getInt(AppConstants.keyTotalLevelsCompleted) ?? 0;
       _dailyStreak = prefs.getInt(AppConstants.keyDailyStreak) ?? 0;
-      // Use persisted hints; fall back to initialHints (2) for new installs
       _hints = prefs.getInt(AppConstants.keyTotalHints) ??
           AppConstants.initialHints;
       _updateStreak(prefs);
     } catch (_) {}
 
     _audio.init().catchError((_) {});
-
     _loadLevelInternal(savedLevelId.clamp(0, 999999));
   }
 
   void _loadLevelInternal(int globalId) {
-    // Use LevelGenerator.levelAt() which handles both campaign (0-99) and endless (100+)
     final lvl = LevelGenerator.levelAt(globalId);
     _currentLevelConfig = lvl;
     _currentLevelId        = globalId;
@@ -168,7 +175,8 @@ class GameProvider extends ChangeNotifier {
     _activePours.clear();
     _undoGeneration++;
     _undoStack.clear();
-    _levelStartTime = DateTime.now(); // competition timer starts here
+    _levelStartTime = DateTime.now();
+    _boardStateVersion++;   // new level = new board
     notifyListeners();
     _audio.playLevelStart().catchError((_) {});
   }
@@ -184,14 +192,9 @@ class GameProvider extends ChangeNotifier {
   }
 
   void nextLevel() {
-    // No upper bound — LevelGenerator.levelAt() generates campaign levels for
-    // ids 0-99 and infinite Endless levels for id 100+.
     loadLevel(_currentLevelId + 1);
   }
 
-  /// Jumps straight into Endless Mode from anywhere (e.g. a menu button).
-  /// Always lands on a fresh endless level the player hasn't necessarily seen,
-  /// keeping at least 100 as the floor.
   void startEndlessMode() {
     final start = max(100, _currentLevelId + 1);
     loadLevel(start);
@@ -202,10 +205,6 @@ class GameProvider extends ChangeNotifier {
   // ── Tube selection & pour ───────────────────────────────────────────────────
   void selectTube(int index) {
     if (_status != GameStatus.playing) return;
-    // Once moves are exhausted, stop accepting new pours right away — even
-    // though the game-over overlay itself is deferred until the triggering
-    // pour's animation finishes (see _executePour), input stops immediately
-    // so the player can't sneak in bonus moves during that visual buffer.
     if (isOutOfMoves) return;
     if (index < 0 || index >= _tubes.length) return;
 
@@ -217,6 +216,7 @@ class GameProvider extends ChangeNotifier {
       _selectedIndex = index;
       _tubes[index] = _tubes[index].copyWith(isSelected: true);
       _tryHaptic(HapticFeedback.selectionClick);
+      _boardStateVersion++;
       notifyListeners();
       return;
     }
@@ -224,6 +224,7 @@ class GameProvider extends ChangeNotifier {
     if (_selectedIndex == index) {
       _tubes[index] = _tubes[index].copyWith(isSelected: false);
       _selectedIndex = null;
+      _boardStateVersion++;
       notifyListeners();
       return;
     }
@@ -244,18 +245,12 @@ class GameProvider extends ChangeNotifier {
       } else {
         _selectedIndex = null;
       }
+      _boardStateVersion++;
       notifyListeners();
     }
   }
 
   // ── Pour execution ───────────────────────────────────────────────────────────
-  // Data mutates INSTANTLY here — the move, undo snapshot, and win/game-over
-  // outcome are all decided synchronously the moment a move is validated.
-  // The 700ms that follows is a purely cosmetic stream+splash animation
-  // with zero effect on game state, tracked in _activePours. This is what
-  // lets one tube's pour animate without freezing input on the rest of the
-  // board — previously a single _isPouring flag blocked every tube until
-  // each pour's animation had fully finished playing.
   void _executePour(int fromIdx, int toIdx) {
     if (fromIdx == toIdx) return;
     if (fromIdx < 0 || fromIdx >= _tubes.length) return;
@@ -264,14 +259,13 @@ class GameProvider extends ChangeNotifier {
 
     final from = _tubes[fromIdx];
     final to   = _tubes[toIdx];
-    if (!to.canReceive(from)) return; // stale/invalid move — safe no-op
+    if (!to.canReceive(from)) return;
 
     final topColor  = from.topColor!;
     final topCount  = from.topColorCount;
     final canFit    = to.capacity - to.colors.length;
     final moveCount = min(topCount, canFit);
 
-    // Undo snapshot — captured BEFORE mutating, same as before.
     _undoStack.add(_tubes
         .map((t) => t.copyWith(
             colors: List<int>.from(t.colors), isSelected: false))
@@ -300,30 +294,21 @@ class GameProvider extends ChangeNotifier {
       _audio.playChime().catchError((_) {});
     }
 
-    // Register a purely-visual pour — the UI animates it independently and
-    // it self-removes below. No game logic depends on it any further.
     final id  = _pourIdCounter++;
     final gen = _undoGeneration;
     _activePours.add(PourEvent(
       id: id, fromIndex: fromIdx, toIndex: toIdx, color: topColor, count: moveCount,
     ));
 
-    // Outcome is already final — data won't change between now and when the
-    // animation finishes, so it's safe to decide it here and just delay
-    // *showing* it until the visual catches up with what already happened.
     final justWon  = _isBoardSolved();
     final justLost = !justWon && isOutOfMoves;
 
+    _boardStateVersion++;
     notifyListeners();
 
     Future.delayed(const Duration(milliseconds: 700), () {
       _activePours.removeWhere((p) => p.id == id);
 
-      // gen guards against a stale outcome: if undo() (or a new level load)
-      // ran in the meantime, this pour's result no longer applies.
-      // The `playing` guard means whichever pour's timer fires first
-      // (always the earliest-started one, since every pour runs the same
-      // fixed duration) performs the transition once; later ones no-op.
       if (_status == GameStatus.playing && gen == _undoGeneration) {
         if (justWon) {
           _status = GameStatus.won;
@@ -338,6 +323,7 @@ class GameProvider extends ChangeNotifier {
           _tryHaptic(HapticFeedback.heavyImpact);
         }
       }
+      _boardStateVersion++;
       notifyListeners();
     });
   }
@@ -351,8 +337,6 @@ class GameProvider extends ChangeNotifier {
     return 1;
   }
 
-  /// True when the just-completed level should trigger an interstitial,
-  /// based on AppConstants.interstitialEveryNLevels (currently every 2 wins).
   bool get shouldShowInterstitial =>
       _totalLevelsCompleted > 0 &&
       _totalLevelsCompleted % AppConstants.interstitialEveryNLevels == 0;
@@ -365,9 +349,10 @@ class GameProvider extends ChangeNotifier {
     _moves         = max(0, _moves - 1);
     _status        = GameStatus.playing;
     _activePours.clear();
-    _undoGeneration++; // invalidate any pending pour outcome from before this undo
+    _undoGeneration++;
     _audio.playClick().catchError((_) {});
     _tryHaptic(HapticFeedback.selectionClick);
+    _boardStateVersion++;
     notifyListeners();
   }
 
@@ -389,13 +374,9 @@ class GameProvider extends ChangeNotifier {
     _hintToIndex   = move[1];
     _isHinting     = true;
     _audio.playClick().catchError((_) {});
+    _boardStateVersion++;
     notifyListeners();
 
-    // Brief highlight then auto-execute. _executePour re-validates the move
-    // itself (via canReceive) before touching anything, so if the board
-    // changed in the meantime — the player made a manual move during this
-    // highlight window — a now-stale hint safely no-ops instead of
-    // corrupting state.
     Future.delayed(const Duration(milliseconds: 600), () {
       if (!_isHinting) return;
       _isHinting     = false;
@@ -407,12 +388,12 @@ class GameProvider extends ChangeNotifier {
         }
       }
       _selectedIndex = null;
+      // _executePour increments _boardStateVersion and calls notifyListeners
       _executePour(move[0], move[1]);
     });
   }
 
   List<int>? _findBestMove() {
-    // Prefer moves that complete a tube
     for (int f = 0; f < _tubes.length; f++) {
       if (_tubes[f].isEmpty) continue;
       for (int t = 0; t < _tubes.length; t++) {
@@ -424,7 +405,6 @@ class GameProvider extends ChangeNotifier {
         }
       }
     }
-    // Any valid move
     for (int f = 0; f < _tubes.length; f++) {
       if (_tubes[f].isEmpty) continue;
       for (int t = 0; t < _tubes.length; t++) {
@@ -460,10 +440,17 @@ class GameProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  // Zero-pad month/day so the stored string is always ISO-8601
+  // (e.g. "2025-07-05"). The original bare interpolation (e.g. "2025-7-5")
+  // causes DateTime.tryParse to return null on single-digit months or days —
+  // true for 9 of 12 months and most days — silently breaking streak
+  // counting for the large majority of calendar days.
+  static String _z(int v) => v.toString().padLeft(2, '0');
+
   void _updateStreak(SharedPreferences prefs) {
     try {
       final today    = DateTime.now();
-      final todayStr = '${today.year}-${today.month}-${today.day}';
+      final todayStr = '${today.year}-${_z(today.month)}-${_z(today.day)}';
       final lastStr  = prefs.getString(AppConstants.keyLastPlayDate);
       if (lastStr == null) {
         prefs.setString(AppConstants.keyLastPlayDate, todayStr);
@@ -474,7 +461,6 @@ class GameProvider extends ChangeNotifier {
       if (last != null) {
         final diff   = today.difference(last).inDays;
         _dailyStreak = diff == 1 ? _dailyStreak + 1 : 1;
-        // Check streak milestones after updating
         _checkStreakMilestone(_dailyStreak, prefs);
       }
       prefs.setInt(AppConstants.keyDailyStreak,    _dailyStreak);
@@ -482,39 +468,34 @@ class GameProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Checks if the new streak day hits a reward milestone. Grants reward once.
   void _checkStreakMilestone(int streak, SharedPreferences prefs) {
     final milestones = AppConstants.streakHintRewards.keys.toList()..sort();
     for (final day in milestones) {
       if (streak == day) {
         final claimedKey = '${AppConstants.keyStreakClaimedPrefix}$day';
-        if (prefs.getBool(claimedKey) == true) return; // already claimed
+        if (prefs.getBool(claimedKey) == true) return;
 
         final hints    = AppConstants.streakHintRewards[day] ?? 0;
         final adHours  = AppConstants.streakAdFreeHours[day] ?? 0;
 
-        // Grant hints immediately
         if (hints > 0) {
           _hints += hints;
           prefs.setInt(AppConstants.keyTotalHints, _hints);
         }
 
-        // Grant ad-free time via IapService
         if (adHours > 0) {
           IapService().grantStreakAdFree(adHours);
         }
 
-        // Mark claimed
         prefs.setBool(claimedKey, true);
 
-        // Queue the reward popup for the UI
         _pendingStreakReward = StreakReward(
           streak:      day,
           hints:       hints,
           adFreeHours: adHours,
         );
         notifyListeners();
-        return; // only one milestone per update
+        return;
       }
     }
   }

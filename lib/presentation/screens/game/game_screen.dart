@@ -44,10 +44,21 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final game     = context.watch<GameProvider>();
-    final iap      = context.watch<IapService>();
-    final worldIdx = game.currentWorldIndex.clamp(0, AppConstants.worlds.length - 1);
-    final world    = AppConstants.worlds[worldIdx];
+    // ── Scope rebuilds: outer scaffold only needs world, level id (for
+    // ambient glow seed), status, and ads flag.  Everything else (moves,
+    // hints, tubes, pours) is handled by inner child widgets via their own
+    // scoped context.select calls, so a tube tap no longer rebuilds the
+    // Scaffold/Container/SafeArea wrapper.
+    final (worldIdx, levelId, status) =
+        context.select<GameProvider, (int, int, GameStatus)>((g) => (
+              g.currentWorldIndex.clamp(0, AppConstants.worlds.length - 1),
+              g.currentLevelId,
+              g.status,
+            ));
+    final adsRemoved =
+        context.select<IapService, bool>((g) => g.adsRemoved);
+
+    final world      = AppConstants.worlds[worldIdx];
     final worldColor = Color(world['primaryColor'] as int);
     final worldBg    = Color(world['bgColor'] as int);
 
@@ -66,23 +77,20 @@ class _GameScreenState extends State<GameScreen> {
             _GameHeader(worldColor: worldColor, worldName: world['name'] as String),
             Expanded(
               child: Stack(children: [
-                // Ambient glow sits behind everything — seeded per level so
-                // each one looks a little different, colored to the current
-                // world so it stays visually coherent.
                 _LevelAmbientGlow(
-                  levelSeed:    game.currentLevelId,
+                  levelSeed:    levelId,
                   primaryColor: worldColor,
                 ),
-                if (game.status == GameStatus.won)
+                if (status == GameStatus.won)
                   _WinOverlay()
-                else if (game.status == GameStatus.gameOver)
+                else if (status == GameStatus.gameOver)
                   _GameOverOverlay()
                 else
                   _GameBoard(),
               ]),
             ),
-            if (game.status == GameStatus.playing) _GameControls(),
-            if (!iap.adsRemoved && _banner != null)
+            if (status == GameStatus.playing) _GameControls(),
+            if (!adsRemoved && _banner != null)
               SizedBox(
                 height: 50,
                 width: double.infinity,
@@ -97,20 +105,6 @@ class _GameScreenState extends State<GameScreen> {
 
 // ── HEADER ──────────────────────────────────────────────────────────────────────
 // ── LEVEL AMBIENT GLOW ────────────────────────────────────────────────────────
-// A small number of soft, slowly-drifting glow orbs colored to the current
-// world, with per-level variation in position/motion/timing so every level
-// looks a little different from its neighbors even within the same world —
-// while staying visually coherent (same color family) since the palette is
-// still tied to the world, not randomized per level.
-//
-// Kept deliberately cheap, the same way the home screen's ambient orbs are:
-// ONE shared AnimationController drives all orbs (not one controller each —
-// that pattern caused real ticker pile-ups earlier on the splash screen and
-// competition leaderboard). Rendering is plain Container + RadialGradient,
-// not a CustomPainter — no per-pixel work, no blur filters. Wrapped in
-// RepaintBoundary so this continuous animation never forces the tube board
-// above it to repaint, and IgnorePointer so it can never intercept a tap
-// meant for a tube.
 class _LevelAmbientGlow extends StatefulWidget {
   final int   levelSeed;
   final Color primaryColor;
@@ -138,7 +132,6 @@ class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
   @override
   void didUpdateWidget(_LevelAmbientGlow old) {
     super.didUpdateWidget(old);
-    // New level → regenerate the orb layout so each level looks different.
     if (old.levelSeed != widget.levelSeed) {
       setState(_buildOrbs);
     }
@@ -222,6 +215,7 @@ class _GlowOrbSpec {
   });
 }
 
+// ── GAME HEADER ─────────────────────────────────────────────────────────────────
 class _GameHeader extends StatelessWidget {
   final Color  worldColor;
   final String worldName;
@@ -229,9 +223,15 @@ class _GameHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final game      = context.watch<GameProvider>();
-    final remaining = game.movesRemaining;
-    final isLow     = game.isMovesLow;
+    // Select only the two values this header actually displays.
+    // A tube tap does NOT change movesRemaining/isMovesLow/currentLevelInWorld
+    // so the header stays idle during selection — only rebuilds after a pour.
+    final (remaining, isLow, levelInWorld) =
+        context.select<GameProvider, (int, bool, int)>((g) => (
+              g.movesRemaining,
+              g.isMovesLow,
+              g.currentLevelInWorld,
+            ));
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -255,7 +255,7 @@ class _GameHeader extends StatelessWidget {
             Text(worldName,
                 style: const TextStyle(
                     fontSize: 12, fontFamily: 'Poppins', color: AppColors.white40)),
-            Text('Level ${game.currentLevelInWorld + 1}',
+            Text('Level ${levelInWorld + 1}',
                 style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
@@ -270,7 +270,6 @@ class _GameHeader extends StatelessWidget {
 }
 
 // ── MOVES COUNTER ───────────────────────────────────────────────────────────────
-// FIX: only pulsed when isLow; stopped otherwise. Was always ticking at 60fps.
 class _MovesCounter extends StatefulWidget {
   final int  remaining;
   final bool isLow;
@@ -319,7 +318,6 @@ class _MovesCounterState extends State<_MovesCounter>
         ? AppColors.neonRed.withOpacity(0.08)
         : AppColors.white10;
 
-    // When not low: static widget — zero tickers, zero repaints per frame.
     if (!widget.isLow) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -392,7 +390,15 @@ class _MovesCounterState extends State<_MovesCounter>
 class _GameBoard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final game  = context.watch<GameProvider>();
+    // Only rebuild when board-visible state actually changes.
+    // boardStateVersion is incremented by: tube selection/deselection,
+    // pour start, pour end, undo, hint highlight.
+    // It is NOT incremented by: moves counter, hints count, undo stack
+    // size — those only affect _GameHeader/_GameControls which have their
+    // own scoped selects.
+    context.select<GameProvider, int>((g) => g.boardStateVersion);
+    // Read without subscribing — we already have the dependency above.
+    final game  = context.read<GameProvider>();
     final tubes = game.tubes;
     if (tubes.isEmpty) return const SizedBox.shrink();
 
@@ -413,16 +419,6 @@ class _GameBoard extends StatelessWidget {
       final maxTubeW = (availW - 32 - hGap * (cols - 1)) / cols;
       final maxTubeH = (availH - 16 - vGap * (rows - 1) - arrowH * rows) / rows;
 
-      // Available space is the hard ceiling here. The upper bound (88/280)
-      // caps how large tubes get when there's plenty of room, so they don't
-      // look comically oversized on a tablet — but nothing is allowed to
-      // push size ABOVE what's actually available. The previous two-sided
-      // clamp(80, 280) could force tubeH UP to a minimum of 80 even when
-      // the real available height per row was smaller than that — on very
-      // cramped screens (split-screen multitasking, a folded foldable,
-      // unusual aspect ratios) that forced overflow rather than shrinking
-      // to fit. A verified-safe tube here is always slightly small rather
-      // than clipped off-screen.
       double tubeW = maxTubeW.clamp(0.0, 88.0);
       double tubeH = tubeW * 3.2;
       if (tubeH > maxTubeH) {
@@ -462,14 +458,6 @@ class _GameBoard extends StatelessWidget {
         if (game.activePours.isNotEmpty)
           ...game.activePours.map((pour) => IgnorePointer(
             key: ValueKey('pour_${pour.id}'),
-            // IgnorePointer guarantees this purely-decorative layer can
-            // never intercept a tap meant for a tube underneath it —
-            // applied defensively here regardless of Flutter's exact
-            // default hit-test behavior for CustomPaint, since taps must
-            // always reach the board no matter how many pours are active.
-            // RepaintBoundary isolates each concurrent pour's own repaints
-            // from the others and from the tube board — important now
-            // that several pours can legitimately be animating at once.
             child: RepaintBoundary(
               child: _PourOverlay(
                 pour:       pour,
@@ -491,7 +479,6 @@ class _GameBoard extends StatelessWidget {
 }
 
 // ── POUR OVERLAY ────────────────────────────────────────────────────────────────
-// FIX: single AnimationController, no per-listener Random(), no double-builder.
 class _PourOverlay extends StatefulWidget {
   final PourEvent pour;
   final double tubeW, tubeH, hGap, vGap, arrowH;
@@ -520,9 +507,7 @@ class _PourOverlayState extends State<_PourOverlay>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
   late Color _pourColor;
-  // Pre-seeded RNG — not recreated every frame.
   final _rng = Random(12345);
-  // Splash particles born once when splash phase starts.
   final List<_SplashParticle> _splashPts = [];
   bool _splashSpawned = false;
 
@@ -539,7 +524,6 @@ class _PourOverlayState extends State<_PourOverlay>
 
   void _tick() {
     final p = _ctrl.value;
-    // Spawn splash particles once when stream reaches destination
     if (!_splashSpawned && p >= 0.65) {
       _splashSpawned = true;
       final dest = _tubeTopCenter(widget.pour.toIndex);
@@ -553,7 +537,6 @@ class _PourOverlayState extends State<_PourOverlay>
         ));
       }
     }
-    // Age particles
     if (_splashSpawned) {
       for (final sp in _splashPts) sp.age += 0.07;
       _splashPts.removeWhere((sp) => sp.age >= 1.0);
@@ -642,7 +625,6 @@ class _PourPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (progress <= 0.02) return;
 
-    // Tilt ramp: 0→1 in first 30%, hold, 1→0 at end
     final double tilt;
     if (progress < 0.28)      tilt = progress / 0.28;
     else if (progress < 0.78) tilt = 1.0;
@@ -650,7 +632,6 @@ class _PourPainter extends CustomPainter {
 
     final currentTilt = maxTilt * tilt;
 
-    // Pour mouth position on tilting tube
     final mouth = Offset(
       from.dx +
           tubeW * 0.5 * sin(-currentTilt) * (isRight ? 1.4 : -1.4) +
@@ -659,7 +640,6 @@ class _PourPainter extends CustomPainter {
     );
     final dest = Offset(to.dx, to.dy + 6);
 
-    // Bezier control points
     final dx = dest.dx - mouth.dx;
     final dy = dest.dy - mouth.dy;
     final arcH = max(tubeH * 0.22, dy * 0.30);
@@ -672,11 +652,6 @@ class _PourPainter extends CustomPainter {
         : (1.0 - (progress - 0.82) / 0.18).clamp(0.0, 1.0);
     final baseW = (5.5 * (1 - progress * 0.38)).clamp(1.8, 6.0);
 
-    // Stream — 18 segments (was 28, same visual quality)
-    // Segment count reduced from the original single-pour tuning (was 18)
-    // — with concurrent pours now a core feature, several of these can be
-    // painting on the same frame, so per-instance cost matters more than
-    // it used to. Still visually smooth at 12.
     const segs = 12;
     final paint = Paint()
       ..strokeCap = StrokeCap.round
@@ -688,7 +663,6 @@ class _PourPainter extends CustomPainter {
       if (t1 <= 0) continue;
       final mid   = (t0 + t1) / 2.0;
       final taper = 1.0 - 0.35 * sin(mid * pi);
-      // Shimmer: precomputed, no extra Random()
       final shimmer = 0.06 * sin(mid * pi * 3 + progress * 6.28);
       paint
         ..color      = Color.lerp(color, Colors.white, shimmer.abs())!
@@ -698,7 +672,6 @@ class _PourPainter extends CustomPainter {
                       _cubic(mouth, cp1, cp2, dest, t1), paint);
     }
 
-    // Leading droplet
     if (streamT > 0.06 && streamT < 0.96) {
       final dropPt = _cubic(mouth, cp1, cp2, dest, streamT);
       canvas.drawCircle(dropPt, baseW * 1.05,
@@ -710,12 +683,10 @@ class _PourPainter extends CustomPainter {
       );
     }
 
-    // ── SPLASH at destination ─────────────────────────────────────────────────
     if (progress > 0.65) {
       final sp = ((progress - 0.65) / 0.35).clamp(0.0, 1.0);
       final sa = (1.0 - sp) * 0.8 * fadeAlpha;
 
-      // Expanding ring
       canvas.drawCircle(
         dest, tubeW * 0.30 * sp,
         Paint()
@@ -723,7 +694,6 @@ class _PourPainter extends CustomPainter {
           ..strokeWidth = 1.8
           ..style       = PaintingStyle.stroke,
       );
-      // Second ring (delayed)
       if (sp > 0.3) {
         canvas.drawCircle(
           dest, tubeW * 0.45 * ((sp - 0.3) / 0.7),
@@ -733,7 +703,6 @@ class _PourPainter extends CustomPainter {
             ..style       = PaintingStyle.stroke,
         );
       }
-      // Splash fan drops — 6 rays (was 8; trimmed for concurrent-pour cost)
       for (int s = 0; s < 6; s++) {
         final angle = (s / 6.0) * 2 * pi + sp * 0.8;
         final dist  = tubeW * 0.25 * sp;
@@ -743,22 +712,15 @@ class _PourPainter extends CustomPainter {
           Paint()..color = color.withOpacity(sa * 0.7),
         );
       }
-      // Inner glow — a plain, unblurred translucent circle. The previous
-      // version used MaskFilter.blur here, which is a genuinely expensive
-      // GPU operation compared to everything else this painter does; with
-      // several pours now able to run at once, that cost multiplies per
-      // concurrent instance. This keeps the same soft-glow read without it.
       canvas.drawCircle(
         dest, tubeW * 0.32,
         Paint()..color = color.withOpacity(0.10 * (1 - sp) * fadeAlpha),
       );
     }
 
-    // ── Water splash particles (born once, aged in _tick) ────────────────────
     for (final pt in splashParticles) {
       final alpha = (1.0 - pt.age).clamp(0.0, 1.0);
       final r     = (2.5 * alpha).clamp(0.3, 3.0);
-      // Apply gravity per-frame (age-based, no timer)
       final gPos = Offset(
         pt.pos.dx + pt.vel.dx * pt.age * 12,
         pt.pos.dy + pt.vel.dy * pt.age * 12 + 30 * pt.age * pt.age,
@@ -767,7 +729,6 @@ class _PourPainter extends CustomPainter {
         gPos, r,
         Paint()..color = color.withOpacity(alpha * 0.8),
       );
-      // Tiny highlight
       canvas.drawCircle(
         gPos - Offset(r * 0.3, r * 0.3), r * 0.3,
         Paint()..color = Colors.white.withOpacity(alpha * 0.4),
@@ -831,9 +792,6 @@ class _TubeWidgetState extends State<_TubeWidget>
   void didUpdateWidget(_TubeWidget old) {
     super.didUpdateWidget(old);
     final game = context.read<GameProvider>();
-    // A tube may be the source of an in-flight pour even while others are
-    // also animating elsewhere on the board — check membership, not a
-    // single global pour reference.
     final isPourSrc = game.activePours.any((p) => p.fromIndex == widget.index);
 
     if (widget.tube.isSelected && !old.tube.isSelected) {
@@ -857,8 +815,6 @@ class _TubeWidgetState extends State<_TubeWidget>
   @override
   Widget build(BuildContext context) {
     final game = context.read<GameProvider>();
-    // Find this tube's own in-flight pour, if any — other tubes may have
-    // their own independent pours active at the same time.
     PourEvent? myPour;
     for (final p in game.activePours) {
       if (p.fromIndex == widget.index) { myPour = p; break; }
@@ -935,7 +891,6 @@ class _TubeWidgetState extends State<_TubeWidget>
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(r),
                       child: Stack(children: [
-                        // Glass body
                         Container(
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(r),
@@ -943,7 +898,6 @@ class _TubeWidgetState extends State<_TubeWidget>
                             border: Border.all(color: borderColor, width: borderW),
                           ),
                         ),
-                        // Liquid fill — pure static rendering, no wave ticker
                         if (widget.tube.colors.isNotEmpty)
                           Positioned(
                             bottom: 0, left: 0, right: 0,
@@ -953,7 +907,6 @@ class _TubeWidgetState extends State<_TubeWidget>
                               isPourSource: isPourSrc,
                             ),
                           ),
-                        // Left shine
                         Positioned(
                           top: h*0.05, left: w*0.12,
                           child: Container(
@@ -971,7 +924,6 @@ class _TubeWidgetState extends State<_TubeWidget>
                             ),
                           ),
                         ),
-                        // Top shine dot
                         Positioned(
                           top: h*0.04, left: w*0.28,
                           child: Container(
@@ -982,7 +934,6 @@ class _TubeWidgetState extends State<_TubeWidget>
                             ),
                           ),
                         ),
-                        // Right depth
                         Positioned(
                           top: h*0.08, right: w*0.10,
                           child: Container(
@@ -1014,10 +965,6 @@ class _TubeWidgetState extends State<_TubeWidget>
 }
 
 // ── LIQUID FILL ─────────────────────────────────────────────────────────────────
-// FIX: removed _WaveSurface per-layer ticker. Was creating up to 24 separate
-// AnimationControllers in a typical game board. Replaced with a single
-// shared wave ticker fed down from _GameBoard level via _WaveOverlay.
-// Each color segment is now a plain AnimatedContainer — zero extra tickers.
 class _LiquidFill extends StatelessWidget {
   final TubeModel tube;
   final double    tubeH;
@@ -1058,7 +1005,6 @@ class _LiquidFill extends StatelessWidget {
               ],
             ),
           ),
-          // Top-layer surface highlight — static, no ticker
           child: i == 0
               ? Column(children: [
                   Container(
@@ -1088,7 +1034,10 @@ class _LiquidFill extends StatelessWidget {
 class _GameControls extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final game = context.watch<GameProvider>();
+    // Only rebuild when undo count or hint count changes — not on every tube tap.
+    final (undoCount, hints) =
+        context.select<GameProvider, (int, int)>((g) => (g.undoCount, g.hints));
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
       child: Row(children: [
@@ -1100,10 +1049,10 @@ class _GameControls extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(child: _CtrlBtn(
           icon: Icons.undo_rounded,
-          label: game.undoCount > 0 ? 'Undo (${game.undoCount})' : 'Undo',
+          label: undoCount > 0 ? 'Undo ($undoCount)' : 'Undo',
           color: AppColors.neonBlue,
-          onTap: game.undoCount > 0
-              ? () => game.undo()
+          onTap: undoCount > 0
+              ? () => context.read<GameProvider>().undo()
               : () => _rewardedDialog(context,
                     title: 'Nothing to Undo ↩️',
                     body:  'Watch a short video to get a free undo!',
@@ -1114,10 +1063,10 @@ class _GameControls extends StatelessWidget {
         const SizedBox(width: 10),
         Expanded(child: _CtrlBtn(
           icon: Icons.lightbulb_outline_rounded,
-          label: 'Hint (${game.hints})',
+          label: 'Hint ($hints)',
           color: AppColors.neonYellow,
-          onTap: game.hints > 0
-              ? () => game.useHint()
+          onTap: hints > 0
+              ? () => context.read<GameProvider>().useHint()
               : () => _rewardedDialog(context,
                     title: 'No Hints Left 💡',
                     body:  'Watch a short video to earn 3 hints!',
@@ -1264,7 +1213,13 @@ class _WinOverlayState extends State<_WinOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final game = context.watch<GameProvider>();
+    // Scope to only the two values actually displayed in the win card.
+    // stars and moves don't change after winning, so this is effectively
+    // a one-time read — but scoping keeps _WinOverlay from rebuilding if
+    // any other GameProvider field changes (e.g. clearStreakReward).
+    final (stars, moves) =
+        context.select<GameProvider, (int, int)>((g) => (g.stars, g.moves));
+
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -1281,7 +1236,7 @@ class _WinOverlayState extends State<_WinOverlay> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(3, (i) {
-                final filled = i < game.stars;
+                final filled = i < stars;
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Icon(
@@ -1294,7 +1249,7 @@ class _WinOverlayState extends State<_WinOverlay> {
               }),
             ),
             const SizedBox(height: 6),
-            Text('${game.moves} moves',
+            Text('$moves moves',
                 style: const TextStyle(fontSize: 13,
                     fontFamily: 'Poppins', color: AppColors.white40)),
             if (_competitionPts > 0) ...[
@@ -1316,7 +1271,7 @@ class _WinOverlayState extends State<_WinOverlay> {
             const RemoveAdsBanner(),
             const SizedBox(height: 16),
             GestureDetector(
-              onTap: () => game.nextLevel(),
+              onTap: () => context.read<GameProvider>().nextLevel(),
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 14),
@@ -1338,7 +1293,7 @@ class _WinOverlayState extends State<_WinOverlay> {
             ).animate(delay: 400.ms).fadeIn().slideY(begin: 0.3),
             const SizedBox(height: 10),
             GestureDetector(
-              onTap: () => game.restartLevel(),
+              onTap: () => context.read<GameProvider>().restartLevel(),
               child: const Padding(padding: EdgeInsets.all(8),
                 child: Text('Replay Level', style: TextStyle(fontSize: 13,
                     fontFamily: 'Poppins', color: AppColors.white40))),
@@ -1372,7 +1327,11 @@ class _GameOverOverlayState extends State<_GameOverOverlay>
 
   @override
   Widget build(BuildContext context) {
-    final game = context.watch<GameProvider>();
+    // Only maxMoves is shown; status change (gameOver→playing on addExtraMoves)
+    // is handled by the outer scaffold's status select which removes this widget.
+    final maxMoves =
+        context.select<GameProvider, int>((g) => g.maxMoves);
+
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -1396,7 +1355,7 @@ class _GameOverOverlayState extends State<_GameOverOverlay>
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
                       fontFamily: 'Poppins', color: AppColors.neonRed)),
               const SizedBox(height: 8),
-              Text('Used all ${game.maxMoves} moves.\nWatch an ad to keep going!',
+              Text('Used all $maxMoves moves.\nWatch an ad to keep going!',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 13, fontFamily: 'Poppins',
                     color: AppColors.white40, height: 1.5)),
@@ -1431,7 +1390,7 @@ class _GameOverOverlayState extends State<_GameOverOverlay>
               const RemoveAdsBanner(),
               const SizedBox(height: 16),
               GestureDetector(
-                onTap: () => game.restartLevel(),
+                onTap: () => context.read<GameProvider>().restartLevel(),
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 12),
