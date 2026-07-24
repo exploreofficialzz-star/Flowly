@@ -547,9 +547,14 @@ class _PourOverlayState extends State<_PourOverlay>
     super.initState();
     _pourColor = AppColors.liquidColors[
         widget.pour.color % AppColors.liquidColors.length];
+    // Start at 5 % progress so the stream is visible from the very first
+    // frame this widget is painted.  Previously value=0 + the 0.02 threshold
+    // in _PourPainter meant 2–3 frames (33–50 ms) of invisible controller
+    // before any pixels appeared, causing the "hanging before pour" feel.
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 700),
+      duration: const Duration(milliseconds: 665), // 700 ms total − 35 ms pre-start
+      value: 0.05,
     )..addListener(_tick)..forward();
   }
 
@@ -654,7 +659,7 @@ class _PourPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (progress <= 0.02) return;
+    if (progress < 0.005) return;
 
     final double tilt;
     if (progress < 0.28)      tilt = progress / 0.28;
@@ -810,6 +815,12 @@ class _TubeWidgetState extends State<_TubeWidget>
   late AnimationController _ctrl;
   late Animation<double> _lift;
 
+  // Tracks whether THIS tube was the pour source on the previous build so
+  // that when the pour ends (_wasPourSrc=true → isPourSrc=false) we can
+  // call _ctrl.reverse() and drop the tube back to its rest position.
+  // Without this, the source tube stayed permanently lifted after a pour.
+  bool _wasPourSrc = false;
+
   @override
   void initState() {
     super.initState();
@@ -822,18 +833,24 @@ class _TubeWidgetState extends State<_TubeWidget>
   @override
   void didUpdateWidget(_TubeWidget old) {
     super.didUpdateWidget(old);
-    final game = context.read<GameProvider>();
+    final game      = context.read<GameProvider>();
     final isPourSrc = game.activePours.any((p) => p.fromIndex == widget.index);
 
-    if (widget.tube.isSelected && !old.tube.isSelected) {
-      _ctrl.forward();
-    } else if (!widget.tube.isSelected && old.tube.isSelected) {
-      _ctrl.reverse();
-    }
     if (isPourSrc) {
+      // Pour in progress — lift tube and hold
       _ctrl.forward();
-    } else if (old.tube.isSelected && !widget.tube.isSelected) {
+      _wasPourSrc = true;
+    } else if (_wasPourSrc) {
+      // Pour just finished — drop the tube back to rest
       _ctrl.reverse();
+      _wasPourSrc = false;
+    } else {
+      // Normal selection / deselection
+      if (widget.tube.isSelected && !old.tube.isSelected) {
+        _ctrl.forward();
+      } else if (!widget.tube.isSelected && old.tube.isSelected) {
+        _ctrl.reverse();
+      }
     }
   }
 
