@@ -205,11 +205,6 @@ class GameProvider extends ChangeNotifier {
   // ── Tube selection & pour ───────────────────────────────────────────────────
   void selectTube(int index) {
     if (_status != GameStatus.playing) return;
-    // Block new taps while a pour animation is in flight.  With the
-    // deferred-tube-update model (colors only applied after 700 ms), a second
-    // tap during that window would read stale pre-pour tube data and produce
-    // wrong results — so we simply ignore it.
-    if (isPouring) return;
     if (isOutOfMoves) return;
     if (index < 0 || index >= _tubes.length) return;
 
@@ -256,25 +251,11 @@ class GameProvider extends ChangeNotifier {
   }
 
   // ── Pour execution ───────────────────────────────────────────────────────────
-  // DEFERRED-UPDATE MODEL:
-  // Tube colors are NOT changed immediately.  The pour animation must play
-  // first (700 ms) so the stream is visually consistent with the liquid
-  // movement — previously colors jumped in the destination tube BEFORE the
-  // stream appeared, because notifyListeners() rebuilt the board with the
-  // post-pour data before _PourOverlay even mounted its AnimationController.
-  //
-  // Flow:
-  //  1. Capture undo snapshot (pre-pour state).
-  //  2. Pre-compute the post-pour tube states.
-  //  3. Deselect source tube visually (no color change yet).
-  //  4. Add PourEvent → first notifyListeners() → overlay appears, liquid UNCHANGED.
-  //  5. After 700 ms: apply pre-computed colors + resolve win/loss.
   void _executePour(int fromIdx, int toIdx) {
     if (fromIdx == toIdx) return;
     if (fromIdx < 0 || fromIdx >= _tubes.length) return;
     if (toIdx   < 0 || toIdx   >= _tubes.length) return;
-    if (isPouring)     return;
-    if (isOutOfMoves)  return;
+    if (isOutOfMoves) return;
 
     final from = _tubes[fromIdx];
     final to   = _tubes[toIdx];
@@ -285,44 +266,33 @@ class GameProvider extends ChangeNotifier {
     final canFit    = to.capacity - to.colors.length;
     final moveCount = min(topCount, canFit);
 
-    // ── Undo snapshot — pre-pour state ────────────────────────────────────
     _undoStack.add(_tubes
-        .map((t) => t.copyWith(colors: List<int>.from(t.colors), isSelected: false))
+        .map((t) => t.copyWith(
+            colors: List<int>.from(t.colors), isSelected: false))
         .toList());
     if (_undoStack.length > AppConstants.maxUndoStack) _undoStack.removeAt(0);
 
-    // ── Pre-compute post-pour tube states ──────────────────────────────────
-    final newFromColors = List<int>.from(from.colors)
-      ..removeRange(from.colors.length - moveCount, from.colors.length);
-    final newToColors   = List<int>.from(to.colors)
-      ..addAll(List.filled(moveCount, topColor));
+    final newFrom = List<int>.from(_tubes[fromIdx].colors);
+    final newTo   = List<int>.from(_tubes[toIdx].colors);
+    for (int i = 0; i < moveCount; i++) {
+      newFrom.removeLast();
+      newTo.add(topColor);
+    }
 
-    final rawToTube  = TubeModel(colors: newToColors, capacity: to.capacity);
-    final resultFrom = _tubes[fromIdx].copyWith(colors: newFromColors, isSelected: false);
-    final resultTo   = rawToTube.isPerfect
-        ? rawToTube.copyWith(isCompleted: true)
-        : rawToTube;
+    final newToTube = TubeModel(colors: newTo, capacity: _tubes[toIdx].capacity);
+    _tubes[fromIdx] = _tubes[fromIdx].copyWith(colors: newFrom, isSelected: false);
+    _tubes[toIdx]   = newToTube.isPerfect
+        ? newToTube.copyWith(isCompleted: true)
+        : newToTube;
 
-    // ── Check outcome with the result state ────────────────────────────────
-    // We compute win/loss NOW so the 700ms callback is a pure data-apply step
-    // with no heavy logic.  justWon/justLost are captured in the closure.
-    final resultTubes = List<TubeModel>.from(_tubes)
-      ..[fromIdx] = resultFrom
-      ..[toIdx]   = resultTo;
-    final justWon = resultTubes.every((t) => t.isEmpty || t.isPerfect);
-
-    // Increment moves immediately (drives isOutOfMoves → justLost)
+    _selectedIndex = null;
     _moves++;
-    final justLost = !justWon && isOutOfMoves;
-
-    // ── Visual-only changes (NO color data change yet) ─────────────────────
-    // Clear the selection highlight on the source tube so it no longer glows
-    // blue, but keep its liquid at the pre-pour level.
-    _tubes[fromIdx] = _tubes[fromIdx].copyWith(isSelected: false);
-    _selectedIndex  = null;
 
     _audio.playPour().catchError((_) {});
     _tryHaptic(HapticFeedback.lightImpact);
+    if (_tubes[toIdx].isCompleted) {
+      _audio.playChime().catchError((_) {});
+    }
 
     final id  = _pourIdCounter++;
     final gen = _undoGeneration;
@@ -330,33 +300,16 @@ class GameProvider extends ChangeNotifier {
       id: id, fromIndex: fromIdx, toIndex: toIdx, color: topColor, count: moveCount,
     ));
 
-    // First notify: pour overlay appears.  Tube COLORS are unchanged here so
-    // the user sees the stream start flowing before any liquid moves.
+    final justWon  = _isBoardSolved();
+    final justLost = !justWon && isOutOfMoves;
+
     _boardStateVersion++;
     notifyListeners();
 
-    // ── After animation: apply colors + resolve game state ─────────────────
     Future.delayed(const Duration(milliseconds: 700), () {
       _activePours.removeWhere((p) => p.id == id);
 
-      if (gen != _undoGeneration) {
-        // Undo() was called during the animation — it already restored _tubes
-        // from the snapshot.  Just clear the overlay and return.
-        _boardStateVersion++;
-        notifyListeners();
-        return;
-      }
-
-      // Apply the pre-computed result (AnimatedContainer will smoothly animate
-      // the liquid level change from its current visual state to the new one)
-      _tubes[fromIdx] = resultFrom;
-      _tubes[toIdx]   = resultTo;
-
-      if (resultTo.isCompleted) {
-        _audio.playChime().catchError((_) {});
-      }
-
-      if (_status == GameStatus.playing) {
+      if (_status == GameStatus.playing && gen == _undoGeneration) {
         if (justWon) {
           _status = GameStatus.won;
           _totalLevelsCompleted++;
@@ -370,9 +323,6 @@ class GameProvider extends ChangeNotifier {
           _tryHaptic(HapticFeedback.heavyImpact);
         }
       }
-
-      // Second notify: overlay gone, colors updated.  AnimatedContainer in
-      // _LiquidFill transitions from the pre-pour to post-pour liquid level.
       _boardStateVersion++;
       notifyListeners();
     });
@@ -415,7 +365,6 @@ class GameProvider extends ChangeNotifier {
     if (_status != GameStatus.playing) return;
     if (_hints <= 0)   return;
     if (isOutOfMoves)  return;
-    if (isPouring)     return;
 
     final move = _findBestMove();
     if (move == null) return;

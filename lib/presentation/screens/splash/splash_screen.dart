@@ -4,7 +4,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../services/ad_service.dart';
-import '../../../services/competition_service.dart';
 import '../../providers/game_provider.dart';
 import '../home/home_screen.dart';
 
@@ -29,35 +28,28 @@ class _SplashScreenState extends State<SplashScreen>
         vsync: this, duration: const Duration(milliseconds: 1400))
       ..repeat(reverse: true);
 
-    // Splash animation starts immediately — no blank screen.
-    // _init() fires after the first frame so context is ready.
+    // Init runs after first frame so context is available
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 
   Future<void> _init() async {
-    // Run GameProvider.init(), CompetitionService.init(), the minimum
-    // display delay, and ad-SDK init ALL IN PARALLEL.
-    //
-    // Old approach: await GameProvider.init() → then await delay(2400ms)
-    // was sequential: on a device where init takes 600ms, total = 3000ms.
-    //
-    // New approach: all four run concurrently; total = max(init, 1500ms).
-    // On that same device: max(600ms, 1500ms) = 1500ms — saves ~1.5s.
+    // GameProvider.init() loads progress + audio — non-blocking level gen
     try {
-      await Future.wait([
-        context.read<GameProvider>().init(),
-        context.read<CompetitionService>().init(),
-        AdService().init().catchError((_) async {}),
-        Future.delayed(const Duration(milliseconds: 1500)),
-      ]);
+      await context.read<GameProvider>().init();
     } catch (_) {}
+
+    // Init ads in background
+    AdService().init().catchError((_) {});
+
+    // Minimum splash display time
+    await Future.delayed(const Duration(milliseconds: 2400));
 
     if (!mounted) return;
     Navigator.of(context).pushReplacement(PageRouteBuilder(
       pageBuilder: (_, a, __) => const HomeScreen(),
       transitionsBuilder: (_, a, __, child) =>
           FadeTransition(opacity: a, child: child),
-      transitionDuration: const Duration(milliseconds: 500),
+      transitionDuration: const Duration(milliseconds: 600),
     ));
   }
 
@@ -78,38 +70,37 @@ class _SplashScreenState extends State<SplashScreen>
         height: double.infinity,
         decoration: const BoxDecoration(gradient: AppColors.gradientBg),
         child: Stack(children: [
-          // ── Background orbs ─────────────────────────────────────────────
-          // CustomPainter replaces the previous AnimatedBuilder → Stack →
-          // Positioned → Container chain.  The old approach created
-          // 6 Dart objects per frame (Stack + 2×Positioned + 2×Container +
-          // BoxDecoration) at 60 fps = 360 allocations/second just for orbs.
-          RepaintBoundary(
-            child: SizedBox.expand(
-              child: AnimatedBuilder(
-                animation: _pulseCtrl,
-                builder: (_, __) => CustomPaint(
-                  painter: _OrbPainter(_pulseCtrl.value),
-                ),
+          // Pulsing orbs
+          AnimatedBuilder(
+            animation: _pulseCtrl,
+            builder: (_, __) => Stack(children: [
+              Positioned(
+                top: -60 + 20 * _pulseCtrl.value,
+                right: -60,
+                child: _Orb(
+                    color: AppColors.neonBlue, size: 260, opacity: 0.12),
               ),
-            ),
+              Positioned(
+                bottom: 80 - 15 * _pulseCtrl.value,
+                left: -80,
+                child: _Orb(
+                    color: AppColors.neonPurple, size: 220, opacity: 0.10),
+              ),
+            ]),
           ),
-
-          // ── Ambient particles ────────────────────────────────────────────
-          // 10 particles × (Stack + Positioned + Opacity + Container) = 31
-          // objects per frame = 1 860 allocations/second.  CustomPainter
-          // replaces all of that with 10 drawCircle() calls per frame.
-          RepaintBoundary(
-            child: const _ParticleField(count: 10),
-          ),
-
-          // ── Content ──────────────────────────────────────────────────────
+          // Particles — ONE shared ticker driving all 10, was 10 separate
+          // AnimationControllers (10 independent tickers) for one field.
+          const _ParticleField(count: 10),
+          // Content
           Column(children: [
             SizedBox(height: h * 0.20),
+            // Logo tubes
             _LogoTubes()
                 .animate()
                 .fadeIn(duration: 600.ms)
                 .slideY(begin: -0.15, duration: 700.ms, curve: Curves.easeOut),
             const SizedBox(height: 30),
+            // App name
             AnimatedBuilder(
               animation: _glowCtrl,
               builder: (_, __) => ShaderMask(
@@ -153,10 +144,11 @@ class _SplashScreenState extends State<SplashScreen>
             const SizedBox(height: 56),
             _LoadingDots().animate().fadeIn(delay: 900.ms),
           ]),
-
-          // ── Bottom tag ───────────────────────────────────────────────────
+          // by chAs — bottom
           Positioned(
-            bottom: 36, left: 0, right: 0,
+            bottom: 36,
+            left: 0,
+            right: 0,
             child: Column(children: [
               Container(width: 36, height: 1, color: AppColors.white20),
               const SizedBox(height: 10),
@@ -178,154 +170,36 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-// ── Orb painter ───────────────────────────────────────────────────────────────
-class _OrbPainter extends CustomPainter {
-  final double t; // 0–1 from _pulseCtrl
-
-  const _OrbPainter(this.t);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Orb 1 — top-right, neon blue
-    _orb(canvas,
-        Offset(size.width + 60, -60 + 20 * t), 130,
-        const Color(0xFF00C8FF), 0.12);
-    // Orb 2 — bottom-left, neon purple
-    _orb(canvas,
-        Offset(-80, size.height - 80 + 15 * (1 - t)), 110,
-        const Color(0xFFB400FF), 0.10);
-  }
-
-  void _orb(Canvas canvas, Offset c, double r, Color color, double opacity) {
-    canvas.drawCircle(
-      c, r,
-      Paint()
-        ..shader = RadialGradient(
-          colors: [color.withOpacity(opacity), Colors.transparent],
-        ).createShader(Rect.fromCircle(center: c, radius: r)),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_OrbPainter old) => old.t != t;
-}
-
-// ── Particle field ────────────────────────────────────────────────────────────
-// One shared controller drives all 10 particles via per-particle phase offsets.
-class _ParticleField extends StatefulWidget {
-  final int count;
-  const _ParticleField({required this.count});
-  @override
-  State<_ParticleField> createState() => _ParticleFieldState();
-}
-
-class _ParticleFieldState extends State<_ParticleField>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late List<_ParticleSpec>  _specs;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 3000))
-      ..repeat();
-    final rng = Random();
-    _specs = List.generate(widget.count, (i) => _ParticleSpec(
-      x:          rng.nextDouble(),
-      y:          rng.nextDouble(),
-      size:       1.5 + rng.nextDouble() * 3,
-      phase:      rng.nextDouble(),
-      colorIndex: i % 3,
-    ));
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => SizedBox.expand(
-        child: AnimatedBuilder(
-          animation: _ctrl,
-          builder: (_, __) => CustomPaint(
-            painter: _ParticlePainter(_ctrl.value, _specs),
-          ),
-        ),
-      );
-}
-
-class _ParticlePainter extends CustomPainter {
-  final double             t;
-  final List<_ParticleSpec> specs;
-
-  const _ParticlePainter(this.t, this.specs);
-
-  static const _colors = [
-    Color(0xFF00C8FF), // neonBlue
-    Color(0xFFB400FF), // neonPurple
-    Color(0xFF00FF96), // neonGreen
-  ];
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    for (final p in specs) {
-      final phase = (t + p.phase) % 1.0;
-      final wave  = (sin(phase * 2 * pi) + 1) / 2; // 0–1
-      canvas.drawCircle(
-        Offset(p.x * size.width, p.y * size.height),
-        p.size / 2,
-        Paint()
-          ..color = _colors[p.colorIndex].withOpacity(0.05 + 0.25 * wave),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_ParticlePainter old) => old.t != t;
-}
-
-class _ParticleSpec {
-  final double x, y, size, phase;
-  final int    colorIndex;
-  const _ParticleSpec({
-    required this.x,
-    required this.y,
-    required this.size,
-    required this.phase,
-    required this.colorIndex,
-  });
-}
-
-// ── Logo tubes ────────────────────────────────────────────────────────────────
 class _LogoTubes extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final data = [
-      {'color': AppColors.neonBlue,   'fill': 0.72},
+      {'color': AppColors.neonBlue, 'fill': 0.72},
       {'color': AppColors.neonPurple, 'fill': 0.48},
-      {'color': AppColors.neonGreen,  'fill': 0.88},
+      {'color': AppColors.neonGreen, 'fill': 0.88},
       {'color': AppColors.neonOrange, 'fill': 0.35},
     ];
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(4, (i) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: _GlassTube(
-          color:     data[i]['color'] as Color,
-          fillRatio: data[i]['fill'] as double,
-          height:    96.0 + (i % 2 == 0 ? 16.0 : 0),
-        ),
-      )),
+      children: List.generate(4, (i) {
+        final color = data[i]['color'] as Color;
+        final fill = data[i]['fill'] as double;
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: _GlassTube(
+            color: color,
+            fillRatio: fill,
+            height: 96.0 + (i % 2 == 0 ? 16.0 : 0),
+          ),
+        );
+      }),
     );
   }
 }
 
 class _GlassTube extends StatelessWidget {
-  final Color  color;
+  final Color color;
   final double fillRatio;
   final double height;
   const _GlassTube(
@@ -336,17 +210,22 @@ class _GlassTube extends StatelessWidget {
     const w = 28.0;
     const r = w / 2;
     return Container(
-      width: w, height: height,
+      width: w,
+      height: height,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(r),
         color: Colors.white.withOpacity(0.05),
         border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
         boxShadow: [
-          BoxShadow(color: color.withOpacity(0.4), blurRadius: 12, spreadRadius: 1),
+          BoxShadow(
+              color: color.withOpacity(0.4),
+              blurRadius: 12,
+              spreadRadius: 1),
         ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(children: [
+        // Liquid
         Positioned(
           bottom: 0, left: 0, right: 0,
           child: Container(
@@ -354,14 +233,16 @@ class _GlassTube extends StatelessWidget {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
-                end:   Alignment.bottomCenter,
+                end: Alignment.bottomCenter,
                 colors: [color.withOpacity(0.75), color],
               ),
             ),
           ),
         ),
+        // Liquid surface
         Positioned(
-          bottom: height * fillRatio - 3, left: 4, right: 4,
+          bottom: height * fillRatio - 3,
+          left: 4, right: 4,
           child: Container(
             height: 3,
             decoration: BoxDecoration(
@@ -370,16 +251,21 @@ class _GlassTube extends StatelessWidget {
             ),
           ),
         ),
+        // Glass shine
         Positioned(
           top: 5, left: 4,
           child: Container(
-            width: w * 0.2, height: height * 0.5,
+            width: w * 0.2,
+            height: height * 0.5,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(4),
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
-                end:   Alignment.bottomCenter,
-                colors: [Colors.white.withOpacity(0.3), Colors.transparent],
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.white.withOpacity(0.3),
+                  Colors.transparent,
+                ],
               ),
             ),
           ),
@@ -389,7 +275,6 @@ class _GlassTube extends StatelessWidget {
   }
 }
 
-// ── Loading dots ──────────────────────────────────────────────────────────────
 class _LoadingDots extends StatefulWidget {
   @override
   State<_LoadingDots> createState() => _LoadingDotsState();
@@ -397,8 +282,11 @@ class _LoadingDots extends StatefulWidget {
 
 class _LoadingDotsState extends State<_LoadingDots>
     with SingleTickerProviderStateMixin {
-  late AnimationController      _ctrl;
-  late List<Animation<double>>  _phases;
+  // ONE controller driving all 3 dots via staggered Interval curves —
+  // was 3 separate AnimationControllers (3 independent tickers) for
+  // what is visually a single loading indicator.
+  late AnimationController _ctrl;
+  late List<Animation<double>> _phases;
 
   @override
   void initState() {
@@ -438,12 +326,10 @@ class _LoadingDotsState extends State<_LoadingDots>
             width: 8, height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: AppColors.neonBlue
-                  .withOpacity(0.3 + 0.7 * (v - 0.3) / 0.7),
+              color: AppColors.neonBlue.withOpacity(0.3 + 0.7 * (v - 0.3) / 0.7),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.neonBlue
-                      .withOpacity(0.4 * (v - 0.3) / 0.7),
+                  color: AppColors.neonBlue.withOpacity(0.4 * (v - 0.3) / 0.7),
                   blurRadius: 6,
                 ),
               ],
@@ -453,4 +339,105 @@ class _LoadingDotsState extends State<_LoadingDots>
       ),
     );
   }
+}
+
+class _Orb extends StatelessWidget {
+  final Color color;
+  final double size;
+  final double opacity;
+  const _Orb(
+      {required this.color, required this.size, required this.opacity});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: size, height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      gradient: RadialGradient(
+          colors: [color.withOpacity(opacity), Colors.transparent]),
+    ),
+  );
+}
+
+// ONE shared controller drives ALL particles' opacity via per-particle
+// phase offsets — was 10 separate _Particle widgets, each with its own
+// independent AnimationController (10 concurrent tickers for what is
+// visually a single ambient dust-particle effect).
+class _ParticleField extends StatefulWidget {
+  final int count;
+  const _ParticleField({required this.count});
+  @override
+  State<_ParticleField> createState() => _ParticleFieldState();
+}
+
+class _ParticleFieldState extends State<_ParticleField>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late List<_ParticleSpec> _specs;
+  final _rng = Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 3000))
+      ..repeat();
+    _specs = List.generate(widget.count, (i) {
+      return _ParticleSpec(
+        x:     _rng.nextDouble(),
+        y:     _rng.nextDouble(),
+        size:  1.5 + _rng.nextDouble() * 3,
+        phase: _rng.nextDouble(), // 0..1 offset into the shared cycle
+        colorIndex: i % 3,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const colors = [AppColors.neonBlue, AppColors.neonPurple, AppColors.neonGreen];
+    final sz = MediaQuery.of(context).size;
+
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Stack(
+        children: _specs.map((p) {
+          // Each particle rides the same clock but at its own phase offset,
+          // so they don't all pulse in lockstep — same visual variety as
+          // before, one ticker instead of ten.
+          final t = (_ctrl.value + p.phase) % 1.0;
+          final wave = (sin(t * 2 * pi) + 1) / 2; // 0..1 smooth pulse
+          return Positioned(
+            left: p.x * sz.width,
+            top:  p.y * sz.height,
+            child: Opacity(
+              opacity: 0.05 + 0.25 * wave,
+              child: Container(
+                width: p.size, height: p.size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: colors[p.colorIndex],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _ParticleSpec {
+  final double x, y, size, phase;
+  final int colorIndex;
+  _ParticleSpec({
+    required this.x, required this.y, required this.size,
+    required this.phase, required this.colorIndex,
+  });
 }
