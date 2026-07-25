@@ -174,17 +174,19 @@ class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
     // (5 orbs × Stack + Positioned + Container + BoxDecoration + RadialGradient)
     // = 1 200 objects/second of pure GC pressure. CustomPainter paints
     // directly on the raster thread with no widget tree work at all.
+    // No AnimatedBuilder — _AmbientGlowPainter uses super(repaint: _ctrl) so
+    // paint() is driven directly from the raster thread each animation tick.
+    // AnimatedBuilder was allocating _AmbientGlowPainter + CustomPaint at
+    // 60 fps = 120 objects/second on the main thread, contributing to the
+    // GC pauses that caused the game screen's initial sluggishness.
     return IgnorePointer(
       child: RepaintBoundary(
         child: SizedBox.expand(
-          child: AnimatedBuilder(
-            animation: _ctrl,
-            builder: (_, __) => CustomPaint(
-              painter: _AmbientGlowPainter(
-                t:     _ctrl.value,
-                color: widget.primaryColor,
-                orbs:  _orbs,
-              ),
+          child: CustomPaint(
+            painter: _AmbientGlowPainter(
+              anim:  _ctrl,
+              color: widget.primaryColor,
+              orbs:  _orbs,
             ),
           ),
         ),
@@ -193,20 +195,23 @@ class _LevelAmbientGlowState extends State<_LevelAmbientGlow>
   }
 }
 
-// Paints the 4 drifting radial-gradient orbs without touching the widget tree.
+// Paints the 4 drifting radial-gradient orbs directly on the raster thread.
+// super(repaint: anim) means Flutter schedules a paint whenever the animation
+// controller ticks — no build() phase, no Dart objects created per frame.
 class _AmbientGlowPainter extends CustomPainter {
-  final double          t;
-  final Color           color;
+  final Animation<double> anim;
+  final Color             color;
   final List<_GlowOrbSpec> orbs;
 
-  const _AmbientGlowPainter({
-    required this.t,
+  _AmbientGlowPainter({
+    required this.anim,
     required this.color,
     required this.orbs,
-  });
+  }) : super(repaint: anim);
 
   @override
   void paint(Canvas canvas, Size size) {
+    final t = anim.value;
     for (final o in orbs) {
       final angle  = (t + o.phase) * 2 * pi;
       final dx     = o.baseX * size.width  + sin(angle)       * o.driftX * size.width;
@@ -228,9 +233,12 @@ class _AmbientGlowPainter extends CustomPainter {
     }
   }
 
+  // shouldRepaint only fires on widget-rebuild-driven updates (level change,
+  // color change). The animation ticks themselves bypass shouldRepaint entirely
+  // and are handled by the repaint: anim listener registered above.
   @override
   bool shouldRepaint(_AmbientGlowPainter old) =>
-      old.t != t || old.color != color;
+      old.color != color || !identical(old.orbs, orbs);
 }
 
 class _GlowOrbSpec {
@@ -654,7 +662,10 @@ class _PourPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (progress <= 0.02) return;
+    // Early-exit removed: the loop's `if (t1 <= 0) continue` already draws
+    // nothing at progress=0, so this guard was redundant. It was hiding the
+    // stream for ~33 ms (2 frames) after the overlay mounted, causing the
+    // "hang before pour" perception. Stream now appears on the first paint.
 
     final double tilt;
     if (progress < 0.28)      tilt = progress / 0.28;

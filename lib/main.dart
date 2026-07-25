@@ -22,23 +22,24 @@ void main() async {
   ]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
-  // ── Bootstrap global singletons ───────────────────────────────────────────
-  // AdMob must be ready before anything tries to create a BannerAd.
-  await AdService().init();
-  // IAP: restore any active Remove-Ads subscription from SharedPreferences.
-  // Local disk read only — no network — safe and fast to await.
-  await IapService().init();
-  await CompetitionService().init();
-
-  // Connectivity + ad-block detection: BOTH do real network I/O (HTTP/TCP
-  // probes with multi-second timeouts). Neither is awaited here — awaiting
-  // either one blocks the first frame from ever painting, which on a slow
-  // or congested mobile network can hold the app on a black screen for
-  // several seconds on every single cold launch. Both default their state
-  // to "fine" until a probe says otherwise, so starting the UI immediately
-  // and letting these resolve in the background is strictly safer AND faster.
-  ConnectivityService().init();  // fire-and-forget
-  AdBlockService().init();       // fire-and-forget
+  // ── Bootstrap global singletons — all fire-and-forget ────────────────────
+  // Previously AdService, IapService, and CompetitionService were awaited
+  // SEQUENTIALLY here before runApp(), adding 450–650 ms of blank native
+  // screen on every cold start (AdMob SDK init alone takes 300–500 ms).
+  // None of their results are needed before the first frame paints:
+  //   • AdService   — first banner isn't created until GameScreen, which is
+  //                   several seconds away through Splash → Home navigation.
+  //   • IapService  — defaults to adsRemoved=false (safe). Notifies when
+  //                   the real value loads; UI updates automatically.
+  //   • Competition — defaults to empty leaderboard. Populates during splash.
+  // Starting all five concurrently and calling runApp() immediately means
+  // the splash frame renders without waiting for any SDK — then they all
+  // catch up in the background while the user watches the animation.
+  AdService().init().catchError((_) {});
+  IapService().init().catchError((_) {});
+  CompetitionService().init().catchError((_) {});
+  ConnectivityService().init();
+  AdBlockService().init();
 
   runApp(const FlowlyApp());
 }

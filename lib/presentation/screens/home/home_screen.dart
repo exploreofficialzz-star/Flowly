@@ -451,21 +451,28 @@ class _BgOrbsState extends State<_BgOrbs> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) => SizedBox.expand(
-        child: AnimatedBuilder(
-          animation: _ctrl,
-          builder: (_, __) => CustomPaint(
-            painter: _BgOrbsPainter(_ctrl.value),
-          ),
-        ),
+        // No AnimatedBuilder — painter uses super(repaint: _ctrl) so Flutter
+        // calls paint() directly on the raster thread each tick with zero
+        // main-thread widget allocations. AnimatedBuilder was creating a new
+        // _BgOrbsPainter + CustomPaint on every frame (120 objects/s),
+        // generating constant GC pressure that caused the home screen hang.
+        child: CustomPaint(painter: _BgOrbsPainter(_ctrl)),
       );
 }
 
 class _BgOrbsPainter extends CustomPainter {
-  final double t;
-  const _BgOrbsPainter(this.t);
+  final Animation<double> _anim;
+
+  // super(repaint: _anim) registers this painter as a direct listener on the
+  // AnimationController.  When the controller ticks, Flutter schedules a
+  // repaint on the raster thread and calls paint() — no build() phase, no
+  // new widget objects, no main-thread work at all between frames.
+  _BgOrbsPainter(this._anim) : super(repaint: _anim);
 
   @override
   void paint(Canvas canvas, Size size) {
+    final t = _anim.value;
+
     // Orb 1 — top-right corner, neon blue
     final x1 = size.width  + sin(t * 2 * pi) * 30;
     final y1 = -60.0       + cos(t * 2 * pi) * 30;
@@ -488,8 +495,11 @@ class _BgOrbsPainter extends CustomPainter {
     );
   }
 
+  // shouldRepaint guards widget-rebuild-driven repaints only (e.g. level
+  // change, device rotation). Per-frame animation repaints bypass this
+  // method entirely — they are driven by the repaint: _anim listener above.
   @override
-  bool shouldRepaint(_BgOrbsPainter old) => old.t != t;
+  bool shouldRepaint(_BgOrbsPainter old) => false;
 }
 
 // ── Streak reward popup ───────────────────────────────────────────────────────
