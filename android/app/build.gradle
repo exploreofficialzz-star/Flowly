@@ -35,11 +35,11 @@ android {
         applicationId   "com.chastechgroup.flowly"
         minSdk          24
         targetSdk       36
-        // versionCode and versionName intentionally omitted here.
-        // The Flutter Gradle plugin reads them from pubspec.yaml automatically
-        // (version: 1.0.2+3  →  versionName "1.0.2", versionCode 3).
-        // One source of truth prevents the drift that caused versionCode 2 in
-        // build.gradle vs build number 1 in pubspec to diverge silently.
+        // Kept explicit so the Gradle plugin has a version code to write into
+        // the manifest. Without this, bundleRelease fails with "Version code
+        // not found in manifest". Values mirror pubspec.yaml version: 1.0.2+3.
+        versionCode     3
+        versionName     "1.0.2"
         multiDexEnabled true
     }
 
