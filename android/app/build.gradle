@@ -37,9 +37,9 @@ android {
         targetSdk       36
         // Kept explicit so the Gradle plugin has a version code to write into
         // the manifest. Without this, bundleRelease fails with "Version code
-        // not found in manifest". Values mirror pubspec.yaml version: 1.0.2+3.
-        versionCode     3
-        versionName     "1.0.2"
+        // not found in manifest". Values mirror pubspec.yaml version: 1.0.3+4.
+        versionCode     4
+        versionName     "1.0.3"
         multiDexEnabled true
     }
 
