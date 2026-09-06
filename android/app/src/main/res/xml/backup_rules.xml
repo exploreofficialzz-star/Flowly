@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Full backup content rules for Android 11 and below (API < 31).
+  On Android 12+ devices, android:dataExtractionRules takes precedence.
+
+  Flutter stores all SharedPreferences in FlutterSharedPreferences.xml.
+  This covers: game progress, level state, settings, streak, IAP expiry.
+-->
+<full-backup-content>
+
+    <!--
+      Include game progress and user settings so players don't lose their
+      progress if they reinstall or restore from a backup.
+    -->
+    <include domain="sharedpref" path="FlutterSharedPreferences.xml"/>
+
+</full-backup-content>

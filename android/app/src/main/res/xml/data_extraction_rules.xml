@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Data extraction rules for Android 12+ (API 31+).
+  Controls what Flowly data is included in:
+    - Cloud backup (Google One / user's Google account)
+    - Device-to-device (D2D) transfer when upgrading phones
+
+  Flutter stores all SharedPreferences in FlutterSharedPreferences.xml.
+  This covers: game progress, level state, settings, streak, IAP expiry.
+-->
+<data-extraction-rules>
+
+    <cloud-backup>
+        <!--
+          Back up game progress and user settings so players don't lose their
+          progress if they reinstall or get a new device.
+        -->
+        <include domain="sharedpref" path="FlutterSharedPreferences.xml"/>
+    </cloud-backup>
+
+    <device-transfer>
+        <!--
+          Transfer all game data during device-to-device migration so players
+          resume exactly where they left off on their new phone.
+        -->
+        <include domain="sharedpref" path="FlutterSharedPreferences.xml"/>
+    </device-transfer>
+
+</data-extraction-rules>
